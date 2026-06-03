@@ -1,0 +1,32 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# ── Dependências do sistema ───────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── uv (gerenciador de pacotes rápido) ───────────────────────────────────────
+RUN pip install --no-cache-dir uv
+
+# ── Dependências Python ───────────────────────────────────────────────────────
+COPY requirements.backend.txt .
+RUN uv pip install --system --no-cache -r requirements.backend.txt
+
+# ── Código da aplicação ───────────────────────────────────────────────────────
+# (descomente quando o código estiver pronto)
+# COPY ./backend ./backend
+
+# ── Diretório de dados para o SQLite ─────────────────────────────────────────
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+# ── Iniciar o servidor ────────────────────────────────────────────────────────
+# Descomente a linha abaixo quando o código estiver pronto:
+# CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# Placeholder: mantém o container vivo para desenvolvimento
+CMD ["tail", "-f", "/dev/null"]
