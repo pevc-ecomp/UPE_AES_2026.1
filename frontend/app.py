@@ -30,8 +30,16 @@ with col_chroma:
         st.caption("Verifique se o container está rodando")
 
 with col_backend:
+    import httpx as _httpx
     backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
-    st.info(f"⚙️ Backend\n\n`{backend_url}`")
+    try:
+        _r = _httpx.get(f"{backend_url}/health", timeout=3)
+        if _r.status_code == 200:
+            st.success(f"✅ Backend — online\n\n`{backend_url}`")
+        else:
+            st.warning(f"⚠️ Backend — erro\n\n`{backend_url}`")
+    except Exception:
+        st.error(f"❌ Backend — offline\n\n`{backend_url}`")
 
 with col_ollama:
     ollama_host = os.getenv("OLLAMA_HOST", "http://ollama:11434")
@@ -57,7 +65,7 @@ if client:
 # ── Descrição das páginas ────────────────────────────────────────────────────
 st.subheader("📋 Páginas disponíveis")
 
-p1, p2, p3 = st.columns(3)
+p1, p2, p3, p4, p5 = st.columns(5)
 
 with p1:
     with st.container(border=True):
@@ -81,4 +89,20 @@ with p3:
         st.markdown(
             "Faça upload de PDFs para indexar no Chroma. "
             "O texto é extraído, dividido em chunks e vetorizado automaticamente."
+        )
+
+with p4:
+    with st.container(border=True):
+        st.markdown("### 🤖 Agentes")
+        st.markdown(
+            "Lista todos os agentes de IA disponíveis "
+            "na plataforma com seus endpoints e status."
+        )
+
+with p5:
+    with st.container(border=True):
+        st.markdown("### 📋 Avaliador de Artigos")
+        st.markdown(
+            "Avalia a relevância de um artigo científico para uma pesquisa "
+            "usando um agente LLM com guardrails anti-injeção."
         )

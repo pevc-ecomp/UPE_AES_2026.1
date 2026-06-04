@@ -16,17 +16,13 @@ COPY requirements.backend.txt .
 RUN uv pip install --system --no-cache -r requirements.backend.txt
 
 # ── Código da aplicação ───────────────────────────────────────────────────────
-# (descomente quando o código estiver pronto)
-# COPY ./backend ./backend
+COPY ./backend /app/backend
 
 # ── Diretório de dados para o SQLite ─────────────────────────────────────────
 RUN mkdir -p /app/data
 
+WORKDIR /app/backend
+
 EXPOSE 8000
 
-# ── Iniciar o servidor ────────────────────────────────────────────────────────
-# Descomente a linha abaixo quando o código estiver pronto:
-# CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-
-# Placeholder: mantém o container vivo para desenvolvimento
-CMD ["tail", "-f", "/dev/null"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
