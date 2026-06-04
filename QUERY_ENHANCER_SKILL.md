@@ -1,194 +1,274 @@
-# 🚀 Query Enhancement Skill
+# Query Enhancement Skill
 
 ## Descrição
 
-A **Query Enhancement Skill** é um módulo que melhora automaticamente as buscas científicas ao incrementar consultas com informações relevantes. Quando o usuário digita uma query, a skill expande o texto com:
+A **Query Enhancement Skill** é um módulo que melhora automaticamente as buscas científicas usando **Claude AI** para incrementar consultas com informações relevantes. 
 
-1. **Keywords**: Palavras-chave principais extraídas da consulta
-2. **Sinônimos**: Sinônimos de termos-chave encontrados na área científica
-3. **Pesquisadores de Referência**: Nomes de pesquisadores conhecidos no tópico da query
+Quando o usuário digita uma query, a skill usa inteligência artificial para:
+
+1. **Keywords**: Extrai palavras-chave principais específicas do tópico
+2. **Sinônimos**: Gera sinônimos acadêmicos de termos importantes
+3. **Pesquisadores de Referência**: Identifica pesquisadores influentes na área
 
 ## Como Funciona
 
-### Fluxo de Uso
+### Fluxo de Processamento
 
 ```
-┌─────────────────┐
-│  Usuário digita │
-│     query       │
-└────────┬────────┘
-         │
-         v
-┌─────────────────────────────────┐
-│  Ativa "Query Enhancement" no   │
-│  painel lateral (checkbox)      │
-└────────┬────────────────────────┘
-         │
-         v
-┌──────────────────────────────────────────────┐
-│ Sistema chama Ollama para processar:         │
-│  - Extrair keywords                          │
-│  - Gerar sinônimos                           │
-│  - Identificar pesquisadores                 │
-└────────┬─────────────────────────────────────┘
-         │
-         v
-┌───────────────────────────────────┐
-│ Query expandida é usada na busca  │
-│ (Query + Keywords + Sinônimos +   │
-│  Pesquisadores)                   │
-└────────┬────────────────────────────┘
-         │
-         v
-┌──────────────────────────────────┐
-│ Resultados mais relevantes são   │
-│ retornados do vector store       │
-└──────────────────────────────────┘
+Usuário digita query
+    ↓
+Ativa "Query Enhancement"
+    ↓
+Sistema chama Claude API para:
+  - Analisar e extrair keywords relevantes
+  - Gerar sinônimos acadêmicos
+  - Identificar pesquisadores de referência
+    ↓
+Query expandida = Query original + Keywords + Sinônimos + Pesquisadores
+    ↓
+Busca vetorial usa query expandida para resultados melhores
 ```
 
-## Usando a Skill
+### Exemplo de Transformação
 
-### Na Interface
-
-1. Vá para a página **🔍 Query Chroma**
-2. No painel lateral, encontre a seção **🚀 Query Enhancement**
-3. Marque o checkbox **"Melhorar query automaticamente"**
-4. Selecione quais componentes incluir:
-   - ☑️ Keywords
-   - ☑️ Sinônimos
-   - ☑️ Pesquisadores
-
-5. Digite sua consulta normalmente
-6. Clique em **🔍 Buscar**
-
-A skill irá:
-- Melhorar sua query automaticamente
-- Exibir um resumo das melhorias em um expansor
-- Usar a query expandida para buscar resultados mais relevantes
-
-### Exemplo
-
-**Query Original:**
+**Input:**
 ```
-aprendizado de máquina para diagnóstico médico
+"aprendizado de máquina para diagnóstico médico"
 ```
 
-**Query Expandida (exemplo):**
+**Output da IA:**
 ```
-aprendizado de máquina para diagnóstico médico machine learning 
-clinical diagnosis deep learning classification health artificial intelligence 
-Geoffrey Hinton Yann LeCun Andrew Ng
+Keywords: machine learning, classification, diagnosis, AI, neural networks
+Sinônimos: {
+  "aprendizado": ["ML", "algoritmos adaptativos"],
+  "diagnóstico": ["clinical diagnosis", "medical detection"]
+}
+Pesquisadores: Yann LeCun, Geoffrey Hinton, Andrew Ng
+
+Query Expandida:
+"aprendizado de máquina para diagnóstico médico machine learning 
+classification diagnosis AI neural networks ML algoritmos adaptativos 
+clinical diagnosis medical detection Yann LeCun Geoffrey Hinton Andrew Ng"
 ```
+
+## Configuração
+
+### 1. Obter Chave API da Anthropic
+
+1. Vá para https://console.anthropic.com/
+2. Crie uma conta ou faça login
+3. Gere uma API key
+4. Copie a chave
+
+### 2. Configurar Variável de Ambiente
+
+**Opção A: Arquivo .env**
+```bash
+cp .env.example .env
+```
+
+Edite `.env` e adicione:
+```env
+ANTHROPIC_API_KEY=sk-ant-seu-key-aqui
+```
+
+**Opção B: Variável de Sistema (Windows)**
+```powershell
+[Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-seu-key-aqui", "User")
+```
+
+**Opção C: Variável de Sistema (Linux/Mac)**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-seu-key-aqui"
+```
+
+### 3. Verificar Funcionamento
+
+```bash
+# Com variável de ambiente configurada
+python interface_demo.py
+
+# Ou com arquivo .env no diretório
+cd /c/Users/rafae/AplicaçõesWEngSoft
+python interface_demo.py
+```
+
+## Como Usar
+
+### Na Interface Flask Demo
+
+1. Acesse http://localhost:5000
+2. Na seção **Query Enhancement**:
+   - Marque "Melhorar query automaticamente"
+   - Selecione quais componentes incluir (Keywords, Sinônimos, Pesquisadores)
+3. Digite sua busca
+4. Clique em "Buscar"
+5. Veja a query expandida e os detalhes da melhoria
+
+### Na Aplicação Streamlit
+
+1. Configure `ANTHROPIC_API_KEY` em .env
+2. Inicie a aplicação Streamlit
+3. Vá para página "Query Chroma"
+4. No sidebar: ative "Query Enhancement"
+5. Digite sua consulta e busque
 
 ## Arquitetura
 
-### Arquivo: `query_enhancer.py`
+### Módulo: `query_enhancer.py`
 
 Funções principais:
 
 ```python
-extract_keywords(query, max_keywords=5)
-# Extrai até 5 palavras-chave principais
+extract_keywords(query, max_keywords=5) -> list[str]
+# Extrai keywords relevantes usando Claude
 
-extract_synonyms(query)
-# Retorna dicionário: {"termo": ["sinônimo1", "sinônimo2"]}
+extract_synonyms(query) -> dict[str, list[str]]
+# Gera sinônimos para termos principais
+# Retorna: {"termo": ["sinônimo1", "sinônimo2"]}
 
-extract_researchers(query, max_researchers=3)
-# Retorna lista de 3 pesquisadores de referência
+extract_researchers(query, max_researchers=3) -> list[str]
+# Identifica pesquisadores de referência
 
-enhance_query(query, include_keywords, include_synonyms, include_researchers)
-# Retorna: {
-#   "enhanced_query": "query expandida",
-#   "keywords": [...],
-#   "synonyms": {...},
-#   "researchers": [...]
-# }
+enhance_query(query, include_keywords, include_synonyms, 
+              include_researchers) -> dict
+# Função principal que orquestra tudo
+# Retorna dicionário com query expandida e componentes
+```
 
-display_enhancement_info(enhancement_result)
-# Exibe UI com detalhes das melhorias
+### Arquivo: `interface_demo.py`
+
+API REST para testar o Query Enhancement:
+
+```
+POST /api/enhance-query
+Content-Type: application/json
+
+{
+  "query": "redes neurais para diagnóstico",
+  "include_keywords": true,
+  "include_synonyms": true,
+  "include_researchers": true
+}
+```
+
+Response:
+```json
+{
+  "enhanced_query": "query original + keywords + sinônimos + pesquisadores",
+  "keywords": ["machine learning", "neural networks", ...],
+  "synonyms": {"termo": ["sinônimo1", "sinônimo2"], ...},
+  "researchers": ["Yann LeCun", "Geoffrey Hinton", ...]
+}
 ```
 
 ## Dependências
 
-A skill utiliza:
-- **Ollama**: API local para processamento de linguagem natural
-- **httpx**: Cliente HTTP para comunicar com Ollama
-- **Streamlit**: Framework web para UI
-
-Variáveis de ambiente:
-```env
-OLLAMA_HOST=http://ollama:11434  # URL do Ollama
-OLLAMA_MODEL_PRIMARY=phi3:mini   # Modelo LLM a usar
+```txt
+streamlit>=1.38.0      # Streamlit app (se usar)
+chromadb>=0.5.0        # Vector store
+httpx>=0.27.0          # Cliente HTTP para Claude API
+anthropic>=0.7.0       # SDK Anthropic (opcional)
+flask>=2.3.0           # Para interface_demo.py
 ```
 
 ## Performance
 
-- **Cache**: Resultados são cacheados por 1 hora (TTL=3600)
-- **Timeout**: 60 segundos para chamadas ao Ollama
-- **Modelo**: phi3:mini (~1.3GB) - leve e rápido
-- **Temperatura**: 0.3 (determinístico)
+- **Tempo de resposta**: 2-5 segundos por query (dependente da API)
+- **Cache**: 1 hora (TTL) para mesmas queries
+- **Modelo usado**: claude-3-5-sonnet-20241022
+- **Max tokens**: 1024 por resposta
 
-## Casos de Uso
+## Custo da API
 
-### ✅ Recomendado
+A Anthropic cobra por tokens:
+- **Input**: ~$3/M tokens
+- **Output**: ~$15/M tokens
 
-- Buscas em linguagem natural/conversacional
-- Consultas vagas ou com termos técnicos variados
+Estimativa para 100 queries:
+- ~2000 tokens de input
+- ~1000 tokens de output
+- Custo: ~$0.02-0.03
+
+## Troubleshooting
+
+### "ANTHROPIC_API_KEY não configurada"
+**Solução:**
+```bash
+# Windows (PowerShell)
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+
+# Linux/Mac
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Ou edite .env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### "Erro ao chamar Claude API"
+1. Verifique se a chave está correta
+2. Verifique conexão com internet
+3. Verifique se a conta tem saldo/créditos
+4. Veja logs de erro completos
+
+### Query demorada
+- A Claude API pode levar 2-5s
+- Isso é normal, especialmente para queries complexas
+- O cache de 1 hora ajuda em queries repetidas
+
+## Casos de Uso Recomendados
+
+✅ **Bom para:**
+- Buscas em linguagem natural
+- Consultas vagas ou ambíguas
 - Busca por tópicos interdisciplinares
-- Queries em português ou linguagem natural
+- Queries em português
+- Encontrar trabalhos de autores específicos
 
-### ⚠️ Cuidado
-
+⚠️ **Cuidado:**
 - Queries muito específicas podem ser sobre-expandidas
-- Dependente da qualidade do modelo Ollama
-- Pode aumentar tempo de busca (2-5s para melhoria)
+- Queries em idiomas pouco comuns podem ter qualidade reduzida
+- Dependência da API (requer internet)
 
 ## Exemplos de Queries
 
 ### Ciência de Dados
 ```
-❓ Análise preditiva em séries temporais
-✨ Query expandida com: time series forecasting, ARIMA, LSTM, 
-   Prophet, Holt-Winters, Rob Hyndman, Markus Hummelshoj
+Input: "análise preditiva em séries temporais"
+→ Keywords: time series, forecasting, ARIMA, prediction
+→ Sinônimos: forecast, temporal sequences, trend analysis
+→ Pesquisadores: Rob Hyndman, Markus Hummelshoj
 ```
 
 ### Biologia
 ```
-❓ Expressão gênica em câncer
-✨ Query expandida com: gene expression, oncology, RNA-seq, 
-   tumor, mutation, David Botstein, Patrick Brown
+Input: "expressão gênica em câncer"
+→ Keywords: gene expression, oncology, RNA, tumor
+→ Sinônimos: molecular profiling, transcriptomics
+→ Pesquisadores: David Botstein, Patrick Brown
 ```
 
 ### Engenharia de Software
 ```
-❓ Testes automatizados em integração contínua
-✨ Query expandida com: automated testing, CI/CD, Jenkins, GitHub Actions,
-   test automation, Kent Beck, Martin Fowler
+Input: "testes automatizados em integração contínua"
+→ Keywords: CI/CD, test automation, Jenkins, DevOps
+→ Sinônimos: continuous integration, automated testing
+→ Pesquisadores: Kent Beck, Martin Fowler
 ```
-
-## Troubleshooting
-
-### "Erro ao chamar Ollama"
-- Verifique se o container Ollama está rodando
-- Confirme `OLLAMA_HOST` nas variáveis de ambiente
-- Teste: `curl http://ollama:11434/api/generate`
-
-### "Nenhuma melhoria aplicada"
-- O modelo Ollama pode estar indisponível
-- Tente novamente (cache de 1 hora)
-- Alternativamente, desmarque a opção e busque normalmente
-
-### Query muito lenta
-- Diminua o número de keywords/sinônimos
-- Use um modelo mais leve (ex: tinyllama)
-- Reduza n_results
 
 ## Desenvolvimento Futuro
 
-### Melhorias Potenciais
-- [ ] Integração com bases de dados de pesquisadores (ORCID, Scopus)
-- [ ] Aprendizado por feedback (melhoria iterativa)
+Possíveis melhorias:
 - [ ] Suporte a múltiplos idiomas
-- [ ] Cache distribuído com Redis
-- [ ] Weighted expansion (peso diferente para cada tipo)
-- [ ] Integração com API externa de ontologias científicas
+- [ ] Cache com Redis distribuído
+- [ ] Integração com APIs acadêmicas (ORCID, Scopus)
+- [ ] Peso diferente para cada tipo de expansão
+- [ ] Aprendizado por feedback dos usuários
+- [ ] Fallback automático se Claude API falhar
+- [ ] Integração com LLMs locais (Ollama) como fallback
+
+## Referências
+
+- [Anthropic API Docs](https://docs.anthropic.com/)
+- [Claude 3.5 Sonnet](https://www.anthropic.com/news/claude-3-5-sonnet)
+- [API Pricing](https://www.anthropic.com/pricing)
