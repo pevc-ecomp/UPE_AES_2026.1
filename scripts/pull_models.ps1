@@ -19,11 +19,11 @@ if (-not $ollamaRunning) {
 Write-Host "Ollama encontrado. Iniciando download dos modelos..." -ForegroundColor Green
 Write-Host ""
 
-Write-Host "Baixando phi3:mini (~2.3 GB) — modelo principal..." -ForegroundColor Cyan
+Write-Host "Baixando phi3:mini (2.3 GB) - modelo principal..." -ForegroundColor Cyan
 docker exec research_ollama ollama pull phi3:mini
 
 Write-Host ""
-Write-Host "Baixando llama3.2:1b (~1.3 GB) — fallback leve..." -ForegroundColor Cyan
+Write-Host "Baixando llama3.2:1b (1.3 GB) - fallback leve..." -ForegroundColor Cyan
 docker exec research_ollama ollama pull llama3.2:1b
 
 Write-Host ""

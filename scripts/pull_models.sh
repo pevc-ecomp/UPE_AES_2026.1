@@ -18,11 +18,11 @@ fi
 echo "Ollama encontrado. Iniciando download dos modelos..."
 echo ""
 
-echo "Baixando phi3:mini (~2.3 GB) — modelo principal..."
+echo "Baixando phi3:mini (2.3 GB) — modelo principal..."
 docker exec research_ollama ollama pull phi3:mini
 
 echo ""
-echo "Baixando llama3.2:1b (~1.3 GB) — fallback leve..."
+echo "Baixando llama3.2:1b (1.3 GB) — fallback leve..."
 docker exec research_ollama ollama pull llama3.2:1b
 
 echo ""

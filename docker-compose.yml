@@ -41,6 +41,8 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+    volumes:
+      - ./data:/app/data          # persiste presets e outros dados no host
     depends_on:
       - backend
     mem_limit: 512m

@@ -7,7 +7,7 @@ class EvaluationRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=1000)
     abstract: str = Field(..., min_length=1, max_length=10000)
     keywords: list[str] = Field(..., min_length=1)
-    research_synopsis: str | None = Field(default=None, max_length=5000)
+    research_synopsis: str = Field(..., min_length=1, max_length=5000)
 
 
 class Verdict(str, Enum):
