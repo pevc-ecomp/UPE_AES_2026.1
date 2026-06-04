@@ -1,5 +1,6 @@
 import streamlit as st
 from utils import get_client, get_or_create_collection, list_collections
+from query_enhancer import enhance_query, display_enhancement_info
 
 st.set_page_config(
     page_title="Query Chroma",
@@ -32,6 +33,21 @@ with st.sidebar:
     n_results = st.slider("Número de resultados:", min_value=1, max_value=20, value=5)
 
     st.divider()
+    st.subheader("🚀 Query Enhancement")
+    use_enhancement = st.checkbox(
+        "Melhorar query automaticamente",
+        value=False,
+        help="Adiciona keywords, sinônimos e pesquisadores à sua busca",
+    )
+
+    if use_enhancement:
+        col_keywords = st.checkbox("Keywords", value=True)
+        col_synonyms = st.checkbox("Sinônimos", value=True)
+        col_researchers = st.checkbox("Pesquisadores", value=True)
+    else:
+        col_keywords = col_synonyms = col_researchers = False
+
+    st.divider()
     if collections:
         col = client.get_collection(collection_name)
         st.metric("Documentos na coleção", col.count())
@@ -54,6 +70,26 @@ if search_btn:
         st.warning("Nenhuma coleção disponível. Faça upload de um PDF primeiro.")
         st.stop()
 
+    # ── Melhoria da query (se ativado) ────────────────────────────────────────
+    enhancement_result = None
+    search_query = query
+
+    if use_enhancement:
+        with st.spinner("🚀 Melhorando sua query..."):
+            try:
+                enhancement_result = enhance_query(
+                    query,
+                    include_keywords=col_keywords,
+                    include_synonyms=col_synonyms,
+                    include_researchers=col_researchers,
+                )
+                search_query = enhancement_result["enhanced_query"]
+                st.info(f"✨ Query expandida para melhor busca")
+            except Exception as e:
+                st.warning(f"Não foi possível melhorar a query: {e}")
+                search_query = query
+
+    # ── Busca ─────────────────────────────────────────────────────────────────
     with st.spinner("Buscando documentos similares..."):
         try:
             collection = get_or_create_collection(client, collection_name)
@@ -64,7 +100,7 @@ if search_btn:
                 st.stop()
 
             results = collection.query(
-                query_texts=[query],
+                query_texts=[search_query],
                 n_results=min(n_results, total),
                 include=["documents", "metadatas", "distances"],
             )
@@ -77,12 +113,19 @@ if search_btn:
             st.error(f"Erro ao buscar: {e}")
             st.stop()
 
+    # ── Exibe detalhes da melhoria ────────────────────────────────────────────
+    if enhancement_result:
+        display_enhancement_info(enhancement_result)
+        st.divider()
+
     # ── Resultados ────────────────────────────────────────────────────────────
     if not docs:
         st.info("Nenhum resultado encontrado.")
         st.stop()
 
     st.success(f"**{len(docs)} resultado(s)** para: *{query[:80]}*")
+    if enhancement_result:
+        st.caption(f"Query expandida: *{enhancement_result['enhanced_query'][:100]}...*")
     st.divider()
 
     for i, (doc, meta, dist) in enumerate(zip(docs, metas, distances)):
