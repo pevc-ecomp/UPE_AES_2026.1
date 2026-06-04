@@ -1,0 +1,43 @@
+{
+  "tipo": "STRING_JUDGE",
+  "avaliacao": {
+    "nota_final": 1,
+    "decisao": "APROVADA",
+    "criterios": {
+      "cobertura_conceitual": {
+        "nota": 0,
+        "justificativa": "A string de busca apresenta uma boa cobertura conceitual, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'machine learning', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+      },
+      "qualidade_sinonimos": {
+        "nota": 0,
+        "justificativa": "A string apresenta uma boa qualidade dos sinônimos, com a inclusão de todas as palavras-chave relevantes. No entanto, há um pequeno problema com a inclusão da palavra 'classification', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+      },
+      "operadores_booleanos": {
+        "nota": 0,
+        "justificativa": "A string apresenta um uso correto dos operadores booleanos, com a inclusão das palavras-chave relevantes. No entanto, há um pequeno problema com a inclusão da palavra 'large language model', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+      },
+      "compatibilidade_base": {
+        "nota": 0,
+        "justificativa": "A string apresenta uma boa compatibilidade com a base científica, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'systematic review', que pode ser considerada como uma etapa específica do processo de revisão sistemática."
+      },
+      "potencial_recall": {
+        "nota": 0,
+        "justificativa": "A string apresenta um bom potencial de recall, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'screening', que pode ser considerada como uma etapa específica do processo de revisão sistemática."
+      },
+      "precisao": {
+        "nota": 0,
+        "justificativa": "A string apresenta uma boa precisão, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'classification', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+      }
+    },
+    "termos_ausentes": [],
+    "problemas_identificados": [
+      {
+        "descrição": "Uso incorreto de operadores booleanos",
+        "localização": "operadores booleanos"
+      }
+    ],
+    "string_sugerida": "artificial intelligence, machine learning, large language model, systematic review, screening",
+    "recomendacao": "A string de busca apresentada é boa e completa, mas pode ser melhorada com a inclusão da palavra 'systematic mapping' para se adequar mais ao objetivo de revisões sistemáticas."
+  },
+  "acao_recomendada": "USAR_STRING"
+}
