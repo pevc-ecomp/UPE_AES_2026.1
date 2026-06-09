@@ -1,0 +1,51 @@
+# ── Variáveis de ambiente (segredos) ─────────────────────────────────────────
+.env
+
+# ── Dados de runtime (gerados ao subir o ambiente) ───────────────────────────
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Ambientes virtuais ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Ferramentas de qualidade e testes ─────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+
+# ── Sistema operacional ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/

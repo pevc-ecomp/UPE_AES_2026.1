@@ -1,0 +1,28 @@
+(1) - Crie um documento chamado "Versões" com todas as versões das ferramentas que você utilizou (bibliotecas, frameworks, linguagens)
+
+(2) - Não peguei, mas resumidamente pedi para escrever as versões exatas e depois colocar no container.
+
+(3) - Agora faça uma lógica de uso de um agente de avaliador se um artigo cientifico obtido de uma revisão bibiliografica cientifica faz sentido ou não.
+ 
+O system prompt precisa:
+Indicar o recebimento de 3 informações fundamentais no input (titulo do artigo + abstract do artigo + palavras chaves do artigo)  uma sinopse sobre do que trata a pesquisa (string de busca opcional). O sistema tem que colocar guardrails para não permitir prompt injection e precisa se limitar à sua função de avaliar a utilidade do artigo com a pesquisa.
+A saída precisa ser um json no formato:
+{score: a number between 0 and 100,
+ verdict: a enum which can bem NOT-RELATED (if the score is between 0-49)|UNSURE(if the score is between 50-79)|RELATED(if the score is between 80-100),
+ reason: a string explaining the reason for the score, explaining how reached it,
+ article_name: string name of the article}
+
+No momento, não irá ter busca na base de conhecimento nem utilização de ferramentas, mas ambos serão considerados mais para frente.
+
+Também crie uma lógica frontend para visualizarmos os agentes que termos e uma página para poder chamá-lo com nossas strings.
+
+(4)
+Coloque n git ignore os arquivos "temporarios" (por exemplo, os modelos baixados), de tal maneira que o usuário precisa rodar a lógica no readme para subir o ambiente.
+
+OBservação: A pasta historiamento de prompts não pode ser ignorada, mas faça com que o agente claude ignore ela (é um historiamento manual meu)
+
+(5)
+
+O avaliador de artigos está indicando "Informe ao menos uma palavra-chave." mesmo quando eu inseri a palavra.
+
+Além disso, adapte a lógica para salvar e carregar pre-sets de artigos para acelerar o teste (ter um botão para abrir um popup que mostra os presets salvos, onde eu posso selecionar um e ele vai automaticamente preencher os campos). Para isso, na página deavaliador de artigos, é necessário um botão de salvar preset e um botão de carregar pre-set.
