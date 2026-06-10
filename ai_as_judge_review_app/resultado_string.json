@@ -1,0 +1,42 @@
+{
+  "tipo": "STRING_JUDGE",
+  "avaliacao": {
+    "nota_final": 2,
+    "decisao": "REVISAR",
+    "criterios": {
+      "cobertura_conceitual": {
+        "nota": 3,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      },
+      "qualidade_sinonimos": {
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      },
+      "operadores_booleanos": {
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      },
+      "compatibilidade_base": {
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      },
+      "potencial_recall": {
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      },
+      "precisao": {
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
+      }
+    },
+    "termos_ausentes": [
+      "artificial intelligence",
+      "machine learning",
+      "large language model"
+    ],
+    "problemas_identificados": [],
+    "string_sugerida": "",
+    "recomendacao": ""
+  },
+  "acao_recomendada": "REVISAR_STRING"
+}
