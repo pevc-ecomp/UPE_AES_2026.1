@@ -46,6 +46,146 @@ class LLMProvider:
         raise NotImplementedError
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "sim", "yes"}:
+            return True
+        if normalized in {"false", "0", "nao", "não", "no"}:
+            return False
+    return default
+
+
+def _as_score(value: Any, default: int = 0, minimum: int = 0, maximum: int = 5) -> int:
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, score))
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                result.append(text)
+        elif isinstance(item, dict):
+            text = str(
+                item.get("descricao")
+                or item.get("descrição")
+                or item.get("texto")
+                or item.get("justificativa")
+                or ""
+            ).strip()
+            if text:
+                result.append(text)
+        elif item is not None:
+            text = str(item).strip()
+            if text:
+                result.append(text)
+    return result
+
+
+def _infer_string_decision(nota_final: int) -> str:
+    if nota_final >= 5:
+        return "APROVADA"
+    if nota_final >= 4:
+        return "APROVADA_COM_RESSALVAS"
+    if nota_final >= 3:
+        return "REVISAR"
+    return "REPROVADA"
+
+
+def _normalize_string_response(data: dict[str, Any]) -> dict[str, Any]:
+    expected_criteria = [
+        "cobertura_conceitual",
+        "qualidade_sinonimos",
+        "operadores_booleanos",
+        "compatibilidade_base",
+        "potencial_recall",
+        "precisao",
+    ]
+    raw_criteria = data.get("criterios")
+    criteria: dict[str, dict[str, Any]] = {}
+    criterion_scores: list[int] = []
+
+    for name in expected_criteria:
+        item = raw_criteria.get(name, {}) if isinstance(raw_criteria, dict) else {}
+        nota = _as_score(item.get("nota"), default=0)
+        justificativa = str(item.get("justificativa", "") or "").strip()
+        criteria[name] = {
+            "nota": nota,
+            "justificativa": justificativa,
+        }
+        if nota > 0:
+            criterion_scores.append(nota)
+
+    nota_final = _as_score(data.get("nota_final"), default=0)
+    if nota_final == 0 and criterion_scores:
+        nota_final = max(1, round(sum(criterion_scores) / len(criterion_scores)))
+
+    decisao = str(data.get("decisao", "") or "").strip().upper()
+    valid_decisions = {"APROVADA", "APROVADA_COM_RESSALVAS", "REVISAR", "REPROVADA"}
+    if decisao not in valid_decisions:
+        decisao = _infer_string_decision(nota_final)
+
+    problemas = _as_string_list(data.get("problemas_identificados"))
+    termos_ausentes = _as_string_list(data.get("termos_ausentes"))
+
+    return {
+        "nota_final": nota_final,
+        "decisao": decisao,
+        "criterios": criteria,
+        "termos_ausentes": termos_ausentes,
+        "problemas_identificados": problemas,
+        "string_sugerida": str(data.get("string_sugerida", "") or "").strip(),
+        "recomendacao": str(data.get("recomendacao", "") or "").strip(),
+    }
+
+
+def _normalize_article_response(data: dict[str, Any]) -> dict[str, Any]:
+    concorda = _as_bool(data.get("concorda_com_aplicacao"), default=False)
+    human_review = _as_bool(data.get("necessita_revisao_humana"), default=False)
+    decisao = str(data.get("decisao_do_judge", "") or "").strip().upper()
+    if decisao not in {"INCLUIR", "EXCLUIR", "INCERTO"}:
+        decisao = "INCERTO"
+
+    criterios_inclusao = _as_string_list(data.get("criterios_inclusao_identificados"))
+    criterios_exclusao = _as_string_list(data.get("criterios_exclusao_identificados"))
+    evidencias = _as_string_list(data.get("evidencias_textuais"))
+    problemas = _as_string_list(data.get("problemas_identificados"))
+
+    nota_final = _as_score(data.get("nota_final"), default=0)
+    if nota_final == 0:
+        if concorda and not human_review and evidencias and not problemas:
+            nota_final = 4
+        elif concorda and evidencias:
+            nota_final = 3
+        elif decisao == "INCERTO" or human_review:
+            nota_final = 2
+        else:
+            nota_final = 1
+
+    return {
+        "concorda_com_aplicacao": concorda,
+        "decisao_do_judge": decisao,
+        "necessita_revisao_humana": human_review,
+        "nota_final": nota_final,
+        "criterios_inclusao_identificados": criterios_inclusao,
+        "criterios_exclusao_identificados": criterios_exclusao,
+        "evidencias_textuais": evidencias,
+        "problemas_identificados": problemas,
+        "recomendacao": str(data.get("recomendacao", "") or "").strip(),
+    }
+
+
 class MockLLMProvider(LLMProvider):
     """
     Provider local para demonstração.
@@ -233,7 +373,11 @@ class OpenAICompatibleProvider(LLMProvider):
             "messages": [
                 {
                     "role": "system",
-                    "content": "Você é um avaliador rigoroso. Retorne apenas JSON válido, sem markdown."
+                    "content": (
+                        "Você é um avaliador rigoroso. "
+                        "Retorne apenas JSON válido, sem markdown, sem comentários e sem texto extra. "
+                        "Nunca use nota 0: use escala inteira de 1 a 5 quando houver campo de nota."
+                    )
                 },
                 {
                     "role": "user",
@@ -258,7 +402,13 @@ class OpenAICompatibleProvider(LLMProvider):
 
         data = json.loads(raw)
         content = data["choices"][0]["message"]["content"]
-        return json.loads(content)
+        parsed = json.loads(content)
+
+        if task == "string":
+            return _normalize_string_response(parsed)
+        if task == "article":
+            return _normalize_article_response(parsed)
+        return parsed
 
 
 def get_provider() -> LLMProvider:

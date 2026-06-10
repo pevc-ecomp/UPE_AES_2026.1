@@ -1,43 +1,42 @@
 {
   "tipo": "STRING_JUDGE",
   "avaliacao": {
-    "nota_final": 1,
-    "decisao": "APROVADA",
+    "nota_final": 2,
+    "decisao": "REVISAR",
     "criterios": {
       "cobertura_conceitual": {
-        "nota": 0,
-        "justificativa": "A string de busca apresenta uma boa cobertura conceitual, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'machine learning', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+        "nota": 3,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       },
       "qualidade_sinonimos": {
-        "nota": 0,
-        "justificativa": "A string apresenta uma boa qualidade dos sinônimos, com a inclusão de todas as palavras-chave relevantes. No entanto, há um pequeno problema com a inclusão da palavra 'classification', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       },
       "operadores_booleanos": {
-        "nota": 0,
-        "justificativa": "A string apresenta um uso correto dos operadores booleanos, com a inclusão das palavras-chave relevantes. No entanto, há um pequeno problema com a inclusão da palavra 'large language model', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       },
       "compatibilidade_base": {
-        "nota": 0,
-        "justificativa": "A string apresenta uma boa compatibilidade com a base científica, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'systematic review', que pode ser considerada como uma etapa específica do processo de revisão sistemática."
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       },
       "potencial_recall": {
-        "nota": 0,
-        "justificativa": "A string apresenta um bom potencial de recall, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'screening', que pode ser considerada como uma etapa específica do processo de revisão sistemática."
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       },
       "precisao": {
-        "nota": 0,
-        "justificativa": "A string apresenta uma boa precisão, pois inclui todas as palavras-chave relevantes relacionadas ao tema. No entanto, há um pequeno problema com a inclusão da palavra 'classification', que pode ser considerada como uma sub-área específica do campo de inteligência artificial."
+        "nota": 2,
+        "justificativa": "Avaliação do protocolo foi realizada com base em uma compreensão detalhada dos conceitos de IA e revisões sistemáticas. No entanto, não foram identificados nenhuma ferramenta ou técnica que atenda às necessidades específicas do protocolo."
       }
     },
-    "termos_ausentes": [],
-    "problemas_identificados": [
-      {
-        "descrição": "Uso incorreto de operadores booleanos",
-        "localização": "operadores booleanos"
-      }
+    "termos_ausentes": [
+      "artificial intelligence",
+      "machine learning",
+      "large language model"
     ],
-    "string_sugerida": "artificial intelligence, machine learning, large language model, systematic review, screening",
-    "recomendacao": "A string de busca apresentada é boa e completa, mas pode ser melhorada com a inclusão da palavra 'systematic mapping' para se adequar mais ao objetivo de revisões sistemáticas."
+    "problemas_identificados": [],
+    "string_sugerida": "",
+    "recomendacao": ""
   },
-  "acao_recomendada": "USAR_STRING"
+  "acao_recomendada": "REVISAR_STRING"
 }
