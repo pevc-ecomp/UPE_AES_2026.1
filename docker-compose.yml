@@ -1,0 +1,103 @@
+services:
+
+  # ─────────────────────────────────────────
+  # BACKEND — FastAPI
+  # ─────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: research_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - CHROMA_HOST=http://chroma:8000
+      - DATABASE_URL=sqlite:////app/data/research.db
+    volumes:
+      - ./data:/app/data          # persiste o SQLite no host
+    depends_on:
+      chroma:
+        condition: service_started
+      ollama:
+        condition: service_started
+    mem_limit: 1g
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # FRONTEND — Streamlit
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: research_frontend
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+    volumes:
+      - ./data:/app/data          # persiste presets e outros dados no host
+    depends_on:
+      - backend
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # LLM LOCAL — Ollama
+  # phi3:mini  (~2.3 GB) — principal
+  # llama3.2:1b (~1.3 GB) — fallback leve
+  # ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: research_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama  # modelos persistem entre restarts
+    mem_limit: 5g                  # suficiente para phi3:mini com folga
+    restart: unless-stopped
+
+    # ── GPU NVIDIA (descomente se tiver placa compatível) ──
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ─────────────────────────────────────────
+  # VECTOR STORE — Chroma
+  # ─────────────────────────────────────────
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: research_chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - chroma_data:/chroma/chroma  # vetores persistem entre restarts
+    mem_limit: 512m
+    restart: unless-stopped
+
+# ─────────────────────────────────────────
+# VOLUMES persistentes
+# ─────────────────────────────────────────
+volumes:
+  ollama_data:
+  chroma_data:
+
+# ─────────────────────────────────────────
+# REDE interna entre os serviços
+# ─────────────────────────────────────────
+networks:
+  default:
+    name: research_network

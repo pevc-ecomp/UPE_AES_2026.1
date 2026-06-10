@@ -1,0 +1,8 @@
+[server]
+maxUploadSize = 50        # MB — tamanho máximo de upload de PDF
+
+[browser]
+gatherUsageStats = false  # desabilita telemetria do Streamlit
+
+[runner]
+fastReruns = true
