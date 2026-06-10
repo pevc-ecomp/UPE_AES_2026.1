@@ -152,7 +152,7 @@ def _call_evaluate(payload: dict) -> dict | None:
         resp = httpx.post(
             f"{BACKEND_URL}/agents/evaluate-article",
             json=payload,
-            timeout=120,
+            timeout=300,
         )
         resp.raise_for_status()
         return resp.json()
