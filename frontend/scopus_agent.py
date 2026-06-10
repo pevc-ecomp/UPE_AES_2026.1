@@ -5,18 +5,19 @@ Builds optimized Scopus query strings (core / expanded / full) and
 simulates 10 relevant results. Supports iterative refinement based on
 paper selection or full pivot when no results are relevant.
 
-This module exposes a single public function: run(llm_client, model).
-The LLM is expected to respond with valid JSON matching the schemas
-described in the system prompt below.
+The system prompt, models and temperature are normally provided by the
+"scopus-agent" agent configured via the backend /agents API (see
+3_Scopus_Agent.py). DEFAULT_SYSTEM_PROMPT is used only as a fallback when
+no such agent is configured.
 """
 
 import json
 import re
 from typing import Any
 
-# ── System prompt ─────────────────────────────────────────────────────────────
+# ── Default system prompt (fallback) ───────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are ScopusAgent, an expert academic search strategist and bibliometric analyst specializing in constructing optimized Scopus queries.
+DEFAULT_SYSTEM_PROMPT = """You are ScopusAgent, an expert academic search strategist and bibliometric analyst specializing in constructing optimized Scopus queries.
 
 ## YOUR ROLE
 You help researchers build, refine, and execute high-quality Scopus search strings that maximize recall and precision. You think like an experienced information specialist who understands Boolean logic, controlled vocabularies, and field-specific terminology.
@@ -116,10 +117,35 @@ When the user finds NO results relevant:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _chat(llm_client, model: str, messages: list[dict]) -> str:
+def _chat(llm_client, model: str, messages: list[dict], temperature: float) -> str:
     """Send messages to Ollama and return the assistant content string."""
-    response = llm_client.chat(model=model, messages=messages)
+    response = llm_client.chat(
+        model=model,
+        messages=messages,
+        options={"temperature": temperature},
+    )
     return response["message"]["content"]
+
+
+def _chat_with_fallback(
+    llm_client, models: list[str], messages: list[dict], temperature: float
+) -> str:
+    """Try each model in order, falling back to the next on failure."""
+    last_error: Exception | None = None
+    for model in models:
+        if not model:
+            continue
+        try:
+            return _chat(llm_client, model, messages, temperature)
+        except Exception as exc:  # noqa: BLE001 — try next model
+            last_error = exc
+    raise RuntimeError(f"All models failed: {last_error}")
+
+
+def _normalize_models(models) -> list[str]:
+    if isinstance(models, str):
+        return [models]
+    return list(models)
 
 
 def _extract_json(text: str) -> Any:
@@ -144,10 +170,16 @@ def _extract_json(text: str) -> Any:
 
 # ── Core agent functions ───────────────────────────────────────────────────────
 
-def optimize_query(llm_client, model: str, user_query: str) -> dict:
+def optimize_query(
+    llm_client,
+    models,
+    user_query: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
+) -> dict:
     """Return optimized Scopus strings for the given natural-language query."""
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
@@ -156,14 +188,20 @@ def optimize_query(llm_client, model: str, user_query: str) -> dict:
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
+    raw = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     return _extract_json(raw)
 
 
-def simulate_results(llm_client, model: str, search_string: str) -> dict:
+def simulate_results(
+    llm_client,
+    models,
+    search_string: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
+) -> dict:
     """Simulate 10 Scopus results for the given search string."""
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
@@ -172,17 +210,19 @@ def simulate_results(llm_client, model: str, search_string: str) -> dict:
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
+    raw = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     return _extract_json(raw)
 
 
 def refine_query(
     llm_client,
-    model: str,
+    models,
     original_query: str,
     current_string: str,
     selected_ids: list[str],
     results: list[dict],
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
 ) -> dict:
     """Refine the search string based on papers the user marked as relevant."""
     selected_papers = [r for r in results if r["id"] in selected_ids]
@@ -203,7 +243,7 @@ def refine_query(
         )
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
@@ -213,5 +253,5 @@ def refine_query(
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
+    raw = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     return _extract_json(raw)
