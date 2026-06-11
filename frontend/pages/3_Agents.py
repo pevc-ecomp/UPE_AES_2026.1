@@ -9,6 +9,12 @@ st.set_page_config(page_title="Agentes", page_icon="🤖", layout="wide")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 DEFAULT_AUTHOR = "pevc-ecomp"
 DEFAULT_MODELS = ["phi3:mini", "llama3.2:1b", "mistral", "llama3:8b", "gemma2:2b"]
+AGENT_TYPES = ["article-evaluator", "scopus-agent", "general"]
+AGENT_TYPE_LABELS = {
+    "article-evaluator": "Avaliador de Artigos",
+    "scopus-agent": "Scopus Agent",
+    "general": "Geral / outro",
+}
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
@@ -47,6 +53,11 @@ def _dialog_create_agent():
     name = st.text_input("Nome do agente *", placeholder="Ex: article-evaluator-v2")
     description = st.text_area("Descrição", height=80,
                                 placeholder="Descreva o propósito deste agente")
+    agent_type = st.selectbox(
+        "Página / tipo de agente *",
+        AGENT_TYPES,
+        format_func=lambda t: AGENT_TYPE_LABELS.get(t, t),
+    )
 
     st.divider()
     st.markdown("**Versão inicial**")
@@ -77,6 +88,7 @@ def _dialog_create_agent():
         payload = {
             "name": name.strip(),
             "description": description.strip(),
+            "agent_type": agent_type,
             "initial_version": {
                 "version_name": v_name.strip() or "v1.0",
                 "version_description": v_desc.strip(),
@@ -94,16 +106,24 @@ def _dialog_create_agent():
 
 
 @st.dialog("Editar Agente")
-def _dialog_edit_agent(agent_id: str, current_name: str, current_description: str):
+def _dialog_edit_agent(agent_id: str, current_name: str, current_description: str,
+                        current_agent_type: str = "general"):
     name = st.text_input("Nome *", value=current_name)
     description = st.text_area("Descrição", value=current_description, height=100)
+    agent_type = st.selectbox(
+        "Página / tipo de agente *",
+        AGENT_TYPES,
+        index=AGENT_TYPES.index(current_agent_type) if current_agent_type in AGENT_TYPES else len(AGENT_TYPES) - 1,
+        format_func=lambda t: AGENT_TYPE_LABELS.get(t, t),
+    )
 
     if st.button("Salvar", type="primary", use_container_width=True):
         if not name.strip():
             st.error("Nome obrigatório.")
             return
         result = _api("PUT", f"/agents/{agent_id}",
-                      json={"name": name.strip(), "description": description.strip()})
+                      json={"name": name.strip(), "description": description.strip(),
+                            "agent_type": agent_type})
         if result:
             st.success("Agente atualizado!")
             st.rerun()
@@ -238,6 +258,9 @@ for agent in agents_data:
 
         with col_info:
             st.markdown(f"### {agent['name']}")
+            st.caption(
+                f"📄 {AGENT_TYPE_LABELS.get(agent.get('agent_type', 'general'), agent.get('agent_type', 'general'))}"
+            )
             if agent.get("description"):
                 st.markdown(agent["description"])
             if active_ver:
@@ -251,7 +274,8 @@ for agent in agents_data:
 
         with col_actions:
             if st.button("✏️ Editar", key=f"edit_{agent['id']}", use_container_width=True):
-                _dialog_edit_agent(agent["id"], agent["name"], agent.get("description", ""))
+                _dialog_edit_agent(agent["id"], agent["name"], agent.get("description", ""),
+                                   agent.get("agent_type", "general"))
 
             if st.button("🗑️ Excluir", key=f"del_{agent['id']}", use_container_width=True):
                 _dialog_delete_agent(agent["id"], agent["name"])

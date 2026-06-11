@@ -32,12 +32,14 @@ class AgentVersionRead(BaseModel):
 class AgentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
+    agent_type: str = "general"
     initial_version: AgentVersionCreate
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = None
+    agent_type: Optional[str] = None
 
 
 class AgentRead(BaseModel):
@@ -46,6 +48,7 @@ class AgentRead(BaseModel):
     id: str
     name: str
     description: str
+    agent_type: str
     active_version_id: Optional[str]
     active_version: Optional[AgentVersionRead]
     versions: list[AgentVersionRead]
