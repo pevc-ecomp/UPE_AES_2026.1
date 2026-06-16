@@ -14,6 +14,8 @@ import json
 import re
 from typing import Any
 
+from json_repair import repair_json
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are ScopusAgent, an expert academic search strategist and bibliometric analyst specializing in constructing optimized Scopus queries.
@@ -58,17 +60,18 @@ Always produce the string in three tiers:
 3. **Full string** — with synonyms + author filters + Scopus field codes
 
 ## RESPONSE FORMAT (JSON ONLY)
-When optimizing a query, respond ONLY with valid JSON (no markdown, no preamble):
+When optimizing a query, respond ONLY with valid JSON (no markdown, no preamble).
+Replace every value below with real content derived from the user's query — do NOT copy the example values literally:
 {
-  "strategy_explanation": "2–3 sentence explanation of the search strategy chosen",
-  "keywords_extracted": ["keyword1", "keyword2"],
-  "synonyms_added": [{"term": "original", "synonyms": ["syn1", "syn2"]}],
-  "reference_authors": [{"name": "Surname, Firstname", "reason": "why this author is relevant"}],
-  "string_core": "...",
-  "string_expanded": "...",
-  "string_full": "...",
-  "recommended_string": "core | expanded | full",
-  "recommended_reason": "brief justification"
+  "strategy_explanation": "Write 2-3 sentences explaining your strategy here",
+  "keywords_extracted": ["actual keyword from query", "another keyword"],
+  "synonyms_added": [{"term": "keyword", "synonyms": ["synonym1", "synonym2"]}],
+  "reference_authors": [{"name": "Smith, John", "reason": "pioneered this field"}],
+  "string_core": "TITLE-ABS-KEY(main concept AND secondary concept)",
+  "string_expanded": "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2))",
+  "string_full": "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2)) AND PUBYEAR > 2015",
+  "recommended_string": "expanded",
+  "recommended_reason": "Write a brief justification here"
 }
 
 ## SIMULATED SCOPUS RESULTS
@@ -116,17 +119,24 @@ When the user finds NO results relevant:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _chat(llm_client, model: str, messages: list[dict]) -> str:
-    """Send messages to Ollama and return the assistant content string."""
-    response = llm_client.chat(model=model, messages=messages)
-    return response["message"]["content"]
+_MAX_RETRIES = 3
+
+
+def _chat(llm_client, model: str, messages: list[dict], retries: int = _MAX_RETRIES) -> Any:
+    """Send messages to Ollama, retrying if no parseable JSON is returned."""
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt in range(1, retries + 1):
+        raw = llm_client.chat(model=model, messages=messages)["message"]["content"]
+        try:
+            return _extract_json(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_exc = exc
+    raise ValueError(f"No JSON after {retries} attempts. Last error: {last_exc}")
 
 
 def _extract_json(text: str) -> Any:
     """Extract the first JSON object or array from a string."""
-    # Strip markdown fences if present
     text = re.sub(r"```(?:json)?", "", text).strip()
-    # Find outermost { ... } or [ ... ]
     for start_char, end_char in [('{', '}'), ('[', ']')]:
         start = text.find(start_char)
         if start == -1:
@@ -138,8 +148,35 @@ def _extract_json(text: str) -> Any:
             elif ch == end_char:
                 depth -= 1
                 if depth == 0:
-                    return json.loads(text[start : i + 1])
+                    candidate = text[start : i + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        # LLM returned malformed JSON — attempt automatic repair
+                        return json.loads(repair_json(candidate))
     raise ValueError("No JSON found in LLM response")
+
+
+_STR_FIELDS = {
+    "strategy_explanation", "string_core", "string_expanded", "string_full",
+    "recommended_string", "recommended_reason",
+}
+
+
+def _normalise(data: Any) -> Any:
+    """Coerce fields that must be strings but LLMs sometimes return as lists."""
+    if isinstance(data, list):
+        # unwrap [{ ... }] → { ... }
+        data = data[0] if len(data) == 1 and isinstance(data[0], dict) else {}
+    if not isinstance(data, dict):
+        return data
+    for field in _STR_FIELDS:
+        val = data.get(field)
+        if isinstance(val, list):
+            data[field] = val[0] if val else ""
+        elif val is not None and not isinstance(val, str):
+            data[field] = str(val)
+    return data
 
 
 # ── Core agent functions ───────────────────────────────────────────────────────
@@ -156,24 +193,22 @@ def optimize_query(llm_client, model: str, user_query: str) -> dict:
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
-    return _extract_json(raw)
+    return _normalise(_chat(llm_client, model, messages))
 
 
 def simulate_results(llm_client, model: str, search_string: str) -> dict:
-    """Simulate 10 Scopus results for the given search string."""
+    """Simulate 5 Scopus results for the given search string."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
-                f"Simulate 10 realistic Scopus results for the following search "
+                f"Simulate 5 realistic Scopus results for the following search "
                 f"string and return ONLY valid JSON as specified:\n\n{search_string}"
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
-    return _extract_json(raw)
+    return _normalise(_chat(llm_client, model, messages))
 
 
 def refine_query(
@@ -213,5 +248,4 @@ def refine_query(
             ),
         },
     ]
-    raw = _chat(llm_client, model, messages)
-    return _extract_json(raw)
+    return _normalise(_chat(llm_client, model, messages))

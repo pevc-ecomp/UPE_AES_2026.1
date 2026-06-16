@@ -22,3 +22,6 @@ ollama>=0.3.0
 httpx==0.28.1
 python-dotenv==1.2.2
 pydantic==2.13.4
+
+# ── Reparo de JSON malformado vindo de LLMs pequenos ─────────────────────────
+json-repair==0.30.3
