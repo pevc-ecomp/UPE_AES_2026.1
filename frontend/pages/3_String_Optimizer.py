@@ -140,6 +140,7 @@ if optimize_btn:
             status.update(label="Erro na otimização", state="error", expanded=True)
             st.error(f"Erro ao otimizar query: {e}")
             st.stop()
+    st.rerun()
 
 # ── Step 2 — Optimized strings ────────────────────────────────────────────────
 if st.session_state.opt_result:
