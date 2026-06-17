@@ -1,9 +1,11 @@
 import json
+import os
 
+import httpx
 import ollama
 import streamlit as st
 
-from scopus_agent import optimize_query, simulate_results, refine_query
+from scopus_agent import DEFAULT_SYSTEM_PROMPT, optimize_query, simulate_results, refine_query
 
 st.set_page_config(
     page_title="String Optimizer",
@@ -19,15 +21,57 @@ st.markdown(
 st.divider()
 
 # ── LLM config (sidebar) ──────────────────────────────────────────────────────
-import os
-
-OLLAMA_HOST  = os.getenv("OLLAMA_HOST",          "http://ollama:11434")
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL_PRIMARY", "phi3:mini")
+OLLAMA_HOST           = os.getenv("OLLAMA_HOST",            "http://ollama:11434")
+BACKEND_URL           = os.getenv("BACKEND_URL",            "http://backend:8000")
+DEFAULT_MODEL         = os.getenv("OLLAMA_MODEL_PRIMARY",   "phi3:mini")
+DEFAULT_FALLBACK_MODEL = os.getenv("OLLAMA_MODEL_FALLBACK", "llama3.2:1b")
 
 with st.sidebar:
-    st.header("⚙️ Configurações do LLM")
-    model = st.text_input("Modelo Ollama:", value=DEFAULT_MODEL)
-    st.caption(f"Host: `{OLLAMA_HOST}`")
+    st.header("🤖 Agente")
+
+    selected_agent_id  = None
+    system_prompt      = DEFAULT_SYSTEM_PROMPT
+    agent_models       = [DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL]
+    agent_temperature  = 0.2
+
+    try:
+        agents_resp = httpx.get(
+            f"{BACKEND_URL}/agents", params={"agent_type": "scopus-agent"}, timeout=10
+        )
+        agents_list = agents_resp.json() if agents_resp.status_code == 200 else []
+    except Exception:
+        agents_list = []
+
+    if agents_list:
+        agent_options = {
+            f"{a['name']} — {(a.get('active_version') or {}).get('version_name', 'sem versão ativa')}": a["id"]
+            for a in agents_list
+        }
+        selected_label = st.selectbox(
+            "Agente a usar:",
+            options=list(agent_options.keys()),
+            index=0,
+        )
+        selected_agent_id = agent_options[selected_label]
+        active_ver = next(
+            (a.get("active_version") for a in agents_list if a["id"] == selected_agent_id),
+            None,
+        )
+        if active_ver:
+            system_prompt     = active_ver["system_prompt"]
+            agent_models      = [active_ver["model_primary"], active_ver["model_fallback"]]
+            agent_temperature = active_ver["temperature"]
+            st.caption(
+                f"Versão: **{active_ver['version_name']}**\n\n"
+                f"Modelo: `{active_ver['model_primary']}`\n\n"
+                f"Temp: `{active_ver['temperature']}`"
+            )
+        else:
+            st.warning("Agente sem versão ativa — usando configuração padrão.")
+    else:
+        st.warning("Nenhum agente 'scopus-agent' configurado — usando configuração padrão.")
+
+    st.caption(f"Host Ollama: `{OLLAMA_HOST}`")
     st.divider()
     st.markdown(
         "**Fluxo de uso:**\n"
@@ -73,7 +117,12 @@ if optimize_btn:
 
     with st.status("Otimizando string de busca...", expanded=True) as status:
         try:
-            result = optimize_query(get_llm(), model, query, on_step=st.write)
+            result = optimize_query(
+                get_llm(), agent_models, query,
+                system_prompt=system_prompt,
+                temperature=agent_temperature,
+                on_step=st.write,
+            )
             st.session_state.opt_result     = result
             st.session_state.original_query = query
             _rec = result.get("recommended_string") or "expanded"
@@ -108,7 +157,7 @@ if st.session_state.opt_result:
         st.markdown("**Autores de referência:**")
         for a in opt.get("reference_authors", []):
             if isinstance(a, dict):
-                name = a.get("name") or a.get("author") or a.get("surname") or str(a)
+                name   = a.get("name") or a.get("author") or a.get("surname") or str(a)
                 reason = a.get("reason") or a.get("justification") or ""
                 st.caption(f"• **{name}** — {reason}")
 
@@ -135,7 +184,6 @@ if st.session_state.opt_result:
         )
         st.code(rec_string, language="text")
 
-    # Allow the user to edit the active string before simulating
     st.session_state.active_string = st.text_area(
         "String ativa (editável antes de simular):",
         value=st.session_state.active_string,
@@ -150,7 +198,12 @@ if st.session_state.opt_result:
     if simulate_btn:
         with st.status("Simulando resultados Scopus...", expanded=True) as status:
             try:
-                sim = simulate_results(get_llm(), model, st.session_state.active_string, on_step=st.write)
+                sim = simulate_results(
+                    get_llm(), agent_models, st.session_state.active_string,
+                    system_prompt=system_prompt,
+                    temperature=agent_temperature,
+                    on_step=st.write,
+                )
                 results = sim.get("results", [])
                 if not results:
                     raise ValueError(f"O modelo não retornou artigos. Resposta recebida: {sim}")
@@ -178,10 +231,10 @@ if st.session_state.sim_results:
 
     selected = []
     for paper in st.session_state.sim_results:
-        pid   = paper.get("id", "")
-        year  = paper.get("year", "—")
-        cites = paper.get("citations", 0)
-        title = paper.get("title", "Sem título")
+        pid         = paper.get("id", "")
+        year        = paper.get("year", "—")
+        cites       = paper.get("citations", 0)
+        title       = paper.get("title", "Sem título")
         authors_str = "; ".join(paper.get("authors", []))
         journal     = paper.get("journal", "—")
         snippet     = paper.get("abstract_snippet", "")
@@ -232,11 +285,13 @@ if st.session_state.sim_results:
             try:
                 refined = refine_query(
                     get_llm(),
-                    model,
+                    agent_models,
                     st.session_state.original_query,
                     st.session_state.active_string,
                     st.session_state.selected_ids,
                     st.session_state.sim_results,
+                    system_prompt=system_prompt,
+                    temperature=agent_temperature,
                     on_step=st.write,
                 )
                 st.session_state.opt_result    = refined

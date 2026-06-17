@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import httpx
+import pandas as pd
 import streamlit as st
 
 st.set_page_config(
@@ -33,6 +34,8 @@ def _save_presets(presets: dict) -> None:
 # ── Session state ─────────────────────────────────────────────────────────────
 if "evaluation_history" not in st.session_state:
     st.session_state.evaluation_history = []
+if "csv_results" not in st.session_state:
+    st.session_state.csv_results = []
 if "presets" not in st.session_state:
     st.session_state.presets = _load_presets()
 
@@ -115,6 +118,51 @@ def _render_criteria_list(
         _clear_list_widgets(state_key, n)
         st.session_state[state_key].append("")
         st.rerun()
+
+
+# ── Research protocol helpers ─────────────────────────────────────────────────
+
+def _build_protocol_payload() -> dict:
+    _sync_list_from_widgets("ev_exclusion_criteria")
+    _sync_list_from_widgets("ev_inclusion_criteria")
+    exclusion_criteria = [c.strip() for c in st.session_state.ev_exclusion_criteria if c.strip()]
+    inclusion_criteria = [c.strip() for c in st.session_state.ev_inclusion_criteria if c.strip()]
+    inclusion_logic = st.session_state.get("ev_inclusion_logic", "ANY").strip() or "ANY"
+    return {
+        "description": st.session_state.ev_protocol_description.strip(),
+        "general_objectives": st.session_state.get("ev_general_objectives", "").strip(),
+        "specific_objectives": st.session_state.get("ev_specific_objectives", "").strip(),
+        "exclusion_criteria": exclusion_criteria,
+        "inclusion_criteria": inclusion_criteria,
+        "inclusion_logic": inclusion_logic,
+    }
+
+
+def _protocol_errors(backend_ok: bool) -> list[str]:
+    errors = []
+    if not st.session_state.ev_protocol_description.strip():
+        errors.append("A descrição da pesquisa (Protocolo) é obrigatória.")
+    if not backend_ok:
+        errors.append("O backend está offline. Verifique os containers.")
+    return errors
+
+
+def _call_evaluate(payload: dict) -> dict | None:
+    try:
+        resp = httpx.post(
+            f"{BACKEND_URL}/agents/evaluate-article",
+            json=payload,
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.json().get("detail", str(exc))
+        st.error(f"Erro do backend: {detail}")
+        return None
+    except Exception as exc:
+        st.error(f"Erro de conexão: {exc}")
+        return None
 
 
 # ── Dialogs ───────────────────────────────────────────────────────────────────
@@ -246,7 +294,9 @@ with st.sidebar:
     st.subheader("🤖 Agente")
     selected_agent_id = None
     try:
-        agents_resp = httpx.get(f"{BACKEND_URL}/agents", timeout=10)
+        agents_resp = httpx.get(
+            f"{BACKEND_URL}/agents", params={"agent_type": "article-evaluator"}, timeout=10
+        )
         agents_list = agents_resp.json() if agents_resp.status_code == 200 else []
     except Exception:
         agents_list = []
@@ -280,22 +330,29 @@ with st.sidebar:
     st.divider()
     n_presets = len(st.session_state.presets)
     st.metric("Presets salvos", n_presets)
-    st.metric("Avaliações nesta sessão", len(st.session_state.evaluation_history))
+    st.metric("Avaliações manuais (sessão)", len(st.session_state.evaluation_history))
+    st.metric("Artigos avaliados via CSV", len(st.session_state.csv_results))
     if st.session_state.evaluation_history:
-        if st.button("🗑️ Limpar histórico", use_container_width=True):
+        if st.button("🗑️ Limpar histórico manual", use_container_width=True):
             st.session_state.evaluation_history = []
+            st.rerun()
+    if st.session_state.csv_results:
+        if st.button("🗑️ Limpar resultados do CSV", use_container_width=True):
+            st.session_state.csv_results = []
             st.rerun()
 
 
 # ── Cabeçalho ─────────────────────────────────────────────────────────────────
 st.title("📋 Avaliador de Artigos Científicos")
 st.markdown(
-    "Avalia a relevância de um artigo para um protocolo de pesquisa, aplicando "
-    "critérios de exclusão eliminatórios e critérios de inclusão configuráveis."
+    "Avalia a relevância de um conjunto de artigos para um protocolo de pesquisa, "
+    "aplicando critérios de exclusão eliminatórios e critérios de inclusão configuráveis."
 )
 st.divider()
 
-# ── Botões de preset ──────────────────────────────────────────────────────────
+# ── Protocolo de pesquisa ─────────────────────────────────────────────────────
+st.subheader("🔬 Protocolo de Pesquisa")
+
 col_save, col_load, _ = st.columns([1, 1, 4])
 with col_save:
     if st.button("💾 Salvar Preset", use_container_width=True):
@@ -303,35 +360,6 @@ with col_save:
 with col_load:
     if st.button("📂 Carregar Preset", use_container_width=True):
         _load_preset_dialog()
-
-st.divider()
-
-# ── Dados do artigo ───────────────────────────────────────────────────────────
-st.subheader("📄 Dados do Artigo")
-
-st.text_input(
-    "Título do artigo *",
-    placeholder="Ex: Deep learning approaches for climate change prediction",
-    max_chars=1000,
-    key="ev_title",
-)
-st.text_area(
-    "Abstract *",
-    placeholder="Cole aqui o abstract do artigo...",
-    height=200,
-    max_chars=10000,
-    key="ev_abstract",
-)
-st.text_input(
-    "Palavras-chave * (separadas por vírgula)",
-    placeholder="Ex: machine learning, neural networks, climate change",
-    key="ev_keywords_raw",
-)
-
-st.divider()
-
-# ── Protocolo de pesquisa ─────────────────────────────────────────────────────
-st.subheader("🔬 Protocolo de Pesquisa")
 
 st.text_area(
     "Descrição da pesquisa *",
@@ -412,76 +440,224 @@ if st.session_state.ev_inclusion_criteria:
 
 st.divider()
 
-evaluate_btn = st.button("🔍 Avaliar Artigo", type="primary", use_container_width=True)
+# ── Dados dos artigos ─────────────────────────────────────────────────────────
+st.subheader("📄 Artigos para Avaliação")
 
-# ── Avaliação ─────────────────────────────────────────────────────────────────
-if evaluate_btn:
-    title    = st.session_state.ev_title
-    abstract = st.session_state.ev_abstract
-    keywords = [k.strip() for k in st.session_state.ev_keywords_raw.split(",") if k.strip()]
-    protocol_description = st.session_state.ev_protocol_description
+input_mode = st.radio(
+    "Modo de entrada dos artigos",
+    options=["📂 Importar CSV (recomendado)", "✍️ Manual (apenas para testes)"],
+    horizontal=True,
+)
 
-    # Sync dynamic lists from live widget values before reading
-    _sync_list_from_widgets("ev_exclusion_criteria")
-    _sync_list_from_widgets("ev_inclusion_criteria")
-    exclusion_criteria = [c.strip() for c in st.session_state.ev_exclusion_criteria if c.strip()]
-    inclusion_criteria = [c.strip() for c in st.session_state.ev_inclusion_criteria if c.strip()]
-    inclusion_logic = st.session_state.get("ev_inclusion_logic", "ANY").strip() or "ANY"
+# ── Modo CSV (lote) ────────────────────────────────────────────────────────────
+if input_mode.startswith("📂"):
+    st.caption(
+        "O arquivo deve conter colunas com **título**, **abstract** e "
+        "**palavras-chave** de cada artigo. Mapeie as colunas abaixo."
+    )
 
-    errors = []
-    if not title.strip():
-        errors.append("O título é obrigatório.")
-    if not abstract.strip():
-        errors.append("O abstract é obrigatório.")
-    if not keywords:
-        errors.append("Informe ao menos uma palavra-chave.")
-    if not protocol_description.strip():
-        errors.append("A descrição da pesquisa é obrigatória.")
-    if not backend_ok:
-        errors.append("O backend está offline. Verifique os containers.")
+    uploaded = st.file_uploader("Arquivo CSV", type=["csv"])
 
-    if errors:
-        for e in errors:
-            st.error(e)
-        st.stop()
-
-    payload = {
-        "title": title.strip(),
-        "abstract": abstract.strip(),
-        "keywords": keywords,
-        "research_protocol": {
-            "description": protocol_description.strip(),
-            "general_objectives": st.session_state.get("ev_general_objectives", "").strip(),
-            "specific_objectives": st.session_state.get("ev_specific_objectives", "").strip(),
-            "exclusion_criteria": exclusion_criteria,
-            "inclusion_criteria": inclusion_criteria,
-            "inclusion_logic": inclusion_logic,
-        },
-        "agent_id": selected_agent_id,
-    }
-
-    with st.spinner("Avaliando artigo com o agente LLM... (pode levar alguns segundos)"):
+    if uploaded is not None:
         try:
-            resp = httpx.post(
-                f"{BACKEND_URL}/agents/evaluate-article",
-                json=payload,
-                timeout=120,
+            df = pd.read_csv(uploaded)
+        except UnicodeDecodeError:
+            uploaded.seek(0)
+            df = pd.read_csv(uploaded, encoding="latin-1")
+
+        st.success(f"{len(df)} linha(s) carregada(s).")
+        st.dataframe(df.head(10), use_container_width=True)
+
+        cols = list(df.columns)
+
+        def _guess_col(candidates: list[str]) -> str:
+            for c in cols:
+                if c.strip().lower() in candidates:
+                    return c
+            return cols[0]
+
+        col_t, col_a, col_k = st.columns(3)
+        with col_t:
+            title_col = st.selectbox(
+                "Coluna do título", cols,
+                index=cols.index(_guess_col(["title", "título", "titulo"])),
             )
-            resp.raise_for_status()
-            result = resp.json()
-        except httpx.HTTPStatusError as exc:
-            detail = exc.response.json().get("detail", str(exc))
-            st.error(f"Erro do backend: {detail}")
+        with col_a:
+            abstract_col = st.selectbox(
+                "Coluna do abstract", cols,
+                index=cols.index(_guess_col(["abstract", "resumo"])),
+            )
+        with col_k:
+            keywords_col = st.selectbox(
+                "Coluna de palavras-chave", cols,
+                index=cols.index(_guess_col(["keywords", "palavras-chave", "palavras_chave"])),
+            )
+
+        col_sep, col_limit = st.columns(2)
+        with col_sep:
+            kw_sep = st.text_input("Separador de palavras-chave", value=";")
+        with col_limit:
+            limit = st.number_input(
+                "Limitar a N artigos (0 = todos)", min_value=0, value=0, step=1,
+            )
+
+        evaluate_csv_btn = st.button(
+            "🔍 Avaliar artigos do CSV", type="primary", use_container_width=True
+        )
+
+        if evaluate_csv_btn:
+            errors = _protocol_errors(backend_ok)
+            if errors:
+                for e in errors:
+                    st.error(e)
+                st.stop()
+
+            protocol_payload = _build_protocol_payload()
+
+            rows = df if limit == 0 else df.head(int(limit))
+            n = len(rows)
+            results = []
+            progress = st.progress(0.0, text=f"Avaliando 0/{n}...")
+            skipped = 0
+
+            for idx, (_, row) in enumerate(rows.iterrows()):
+                title = str(row.get(title_col, "")).strip()
+                abstract = str(row.get(abstract_col, "")).strip()
+                kw_raw = str(row.get(keywords_col, ""))
+                keywords = [k.strip() for k in kw_raw.split(kw_sep) if k.strip()]
+
+                if not title or not abstract or not keywords:
+                    skipped += 1
+                    progress.progress((idx + 1) / n, text=f"Avaliando {idx + 1}/{n}...")
+                    continue
+
+                payload = {
+                    "title": title[:1000],
+                    "abstract": abstract[:10000],
+                    "keywords": keywords,
+                    "research_protocol": protocol_payload,
+                    "agent_id": selected_agent_id,
+                }
+                result = _call_evaluate(payload)
+                if result:
+                    if isinstance(result.get("exclusion_triggered"), list):
+                        result["exclusion_triggered"] = "; ".join(result["exclusion_triggered"])
+                    if isinstance(result.get("inclusion_criteria_met"), list):
+                        result["inclusion_criteria_met"] = "; ".join(result["inclusion_criteria_met"])
+                    results.append({**row.to_dict(), **result})
+                else:
+                    skipped += 1
+
+                progress.progress((idx + 1) / n, text=f"Avaliando {idx + 1}/{n}...")
+
+            progress.empty()
+            if skipped:
+                st.warning(f"{skipped} linha(s) ignorada(s) (dados incompletos ou erro de avaliação).")
+
+            st.session_state.csv_results = results
+            st.rerun()
+
+# ── Modo manual (testes) ───────────────────────────────────────────────────────
+else:
+    st.info("Modo manual destinado a testes pontuais com um único artigo.")
+
+    st.text_input(
+        "Título do artigo *",
+        placeholder="Ex: Deep learning approaches for climate change prediction",
+        max_chars=1000,
+        key="ev_title",
+    )
+    st.text_area(
+        "Abstract *",
+        placeholder="Cole aqui o abstract do artigo...",
+        height=200,
+        max_chars=10000,
+        key="ev_abstract",
+    )
+    st.text_input(
+        "Palavras-chave * (separadas por vírgula)",
+        placeholder="Ex: machine learning, neural networks, climate change",
+        key="ev_keywords_raw",
+    )
+
+    evaluate_btn = st.button("🔍 Avaliar Artigo", type="primary", use_container_width=True)
+
+    if evaluate_btn:
+        title    = st.session_state.ev_title
+        abstract = st.session_state.ev_abstract
+        keywords = [k.strip() for k in st.session_state.ev_keywords_raw.split(",") if k.strip()]
+
+        errors = _protocol_errors(backend_ok)
+        if not title.strip():
+            errors.append("O título é obrigatório.")
+        if not abstract.strip():
+            errors.append("O abstract é obrigatório.")
+        if not keywords:
+            errors.append("Informe ao menos uma palavra-chave.")
+
+        if errors:
+            for e in errors:
+                st.error(e)
             st.stop()
-        except Exception as exc:
-            st.error(f"Erro de conexão: {exc}")
-            st.stop()
 
-    st.session_state.evaluation_history.insert(0, result)
-    st.rerun()
+        payload = {
+            "title": title.strip(),
+            "abstract": abstract.strip(),
+            "keywords": keywords,
+            "research_protocol": _build_protocol_payload(),
+            "agent_id": selected_agent_id,
+        }
+
+        with st.spinner("Avaliando artigo com o agente LLM... (pode levar alguns segundos)"):
+            result = _call_evaluate(payload)
+            if result is None:
+                st.stop()
+
+        st.session_state.evaluation_history.insert(0, result)
+        st.rerun()
 
 
-# ── Resultado mais recente ────────────────────────────────────────────────────
+st.divider()
+
+# ── Resultados do CSV (lote) ───────────────────────────────────────────────────
+if st.session_state.csv_results:
+    results = st.session_state.csv_results
+
+    st.subheader("📊 Resultados da Avaliação em Lote")
+
+    n_related = sum(1 for r in results if r["verdict"] == "RELATED")
+    n_unsure = sum(1 for r in results if r["verdict"] == "UNSURE")
+    n_excluded = sum(1 for r in results if r.get("excluded_by_criterion"))
+    n_not_related = len(results) - n_related - n_unsure
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("✅ RELATED", n_related)
+    c2.metric("⚠️ UNSURE", n_unsure)
+    c3.metric("❌ NOT-RELATED", n_not_related)
+    c4.metric("⛔ Excluídos por critério", n_excluded)
+
+    results_df = pd.DataFrame(results)
+    preferred_cols = [
+        "article_name", "score", "verdict", "excluded_by_criterion",
+        "exclusion_triggered", "inclusion_criteria_met", "reason",
+    ]
+    show_cols = [c for c in preferred_cols if c in results_df.columns]
+    show_cols += [c for c in results_df.columns if c not in show_cols]
+    st.dataframe(results_df[show_cols], use_container_width=True)
+
+    csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Baixar resultados (CSV)",
+        data=csv_bytes,
+        file_name="resultados_avaliacao.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.divider()
+
+
+# ── Resultado mais recente (modo manual) ───────────────────────────────────────
 if st.session_state.evaluation_history:
     latest   = st.session_state.evaluation_history[0]
     verdict  = latest["verdict"]
@@ -490,7 +666,7 @@ if st.session_state.evaluation_history:
     exclusion_triggered = latest.get("exclusion_triggered", [])
     inclusion_met = latest.get("inclusion_criteria_met", [])
 
-    st.subheader("Resultado")
+    st.subheader("Resultado (avaliação manual)")
 
     if excluded:
         st.error("⛔ **Artigo excluído por critério(s) de exclusão** — pontuação zerada")
@@ -528,10 +704,10 @@ if st.session_state.evaluation_history:
     st.divider()
 
 
-# ── Histórico da sessão ───────────────────────────────────────────────────────
+# ── Histórico da sessão (modo manual) ───────────────────────────────────────────
 history = st.session_state.evaluation_history
 if len(history) > 1:
-    st.subheader(f"📜 Histórico da sessão ({len(history)} avaliação(ões))")
+    st.subheader(f"📜 Histórico de avaliações manuais ({len(history)})")
 
     for item in history[1:]:
         v = item["verdict"]

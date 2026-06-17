@@ -1,0 +1,20 @@
+{
+  "tema": "Uso de inteligência artificial no apoio a revisões sistemáticas da literatura",
+  "objetivo": "Identificar ferramentas, técnicas e abordagens baseadas em IA para apoiar etapas de revisões sistemáticas da literatura.",
+  "questoes_pesquisa": [
+    "Quais técnicas de IA são usadas para apoiar revisões sistemáticas?",
+    "Quais etapas da revisão são automatizadas?",
+    "Quais lacunas ainda existem nas ferramentas de apoio a revisões sistemáticas?"
+  ],
+  "criterios_inclusao": [
+    "CI-1: O artigo aborda IA aplicada ao suporte a revisões sistemáticas ou mapeamentos sistemáticos.",
+    "CI-2: O artigo apresenta ferramenta, técnica, método, framework ou abordagem automatizada.",
+    "CI-3: O artigo apoia alguma etapa da revisão, como geração de string, busca, triagem, classificação, extração ou sumarização."
+  ],
+  "criterios_exclusao": [
+    "CE-1: O artigo apenas usa revisão sistemática como método, mas não propõe apoio automatizado.",
+    "CE-2: O artigo não trata de revisão sistemática, mapeamento ou revisão da literatura.",
+    "CE-3: O artigo não apresenta relação com IA, automação ou apoio computacional."
+  ],
+  "base_alvo": "Scopus"
+}

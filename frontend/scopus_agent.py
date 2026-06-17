@@ -2,12 +2,13 @@
 ScopusAgent — academic search strategist and bibliometric analyst.
 
 Builds optimized Scopus query strings (core / expanded / full) and
-simulates 10 relevant results. Supports iterative refinement based on
-paper selection or full pivot when no results are relevant.
+simulates results. Supports iterative refinement based on paper selection
+or full pivot when no results are relevant.
 
-This module exposes a single public function: run(llm_client, model).
-The LLM is expected to respond with valid JSON matching the schemas
-described in the system prompt below.
+The system prompt, models and temperature are normally provided by the
+"scopus-agent" agent configured via the backend /agents API (see
+3_String_Optimizer.py). DEFAULT_SYSTEM_PROMPT is used only as a fallback when
+no such agent is configured.
 """
 
 import json
@@ -16,9 +17,9 @@ from typing import Any
 
 from json_repair import repair_json
 
-# ── System prompt ─────────────────────────────────────────────────────────────
+# ── Default system prompt (fallback) ────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are ScopusAgent, an expert academic search strategist and bibliometric analyst specializing in constructing optimized Scopus queries.
+DEFAULT_SYSTEM_PROMPT = """You are ScopusAgent, an expert academic search strategist and bibliometric analyst specializing in constructing optimized Scopus queries.
 
 ## YOUR ROLE
 You help researchers build, refine, and execute high-quality Scopus search strings that maximize recall and precision. You think like an experienced information specialist who understands Boolean logic, controlled vocabularies, and field-specific terminology.
@@ -72,26 +73,6 @@ Replace every value below with real content derived from the user's query — do
   "string_full": "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2)) AND PUBYEAR > 2015",
   "recommended_string": "expanded",
   "recommended_reason": "Write a brief justification here"
-}
-
-## SIMULATED SCOPUS RESULTS
-Since you cannot call the real Scopus API, simulate up to 20 realistic academic results based on the search string. Each result must be plausible, academically formatted, and relevant to the query. Generate results that reflect diversity in year (2018–2024), journal, and methodology.
-
-When returning results, respond ONLY with valid JSON:
-{
-  "results": [
-    {
-      "id": "S001",
-      "title": "...",
-      "authors": ["Surname A, Name", "Surname B, Name"],
-      "journal": "...",
-      "year": 2023,
-      "citations": 45,
-      "doi": "10.1016/...",
-      "keywords": ["kw1", "kw2", "kw3"],
-      "abstract_snippet": "Short 2-sentence summary of what the paper is about"
-    }
-  ]
 }
 
 ## REFINEMENT FROM SELECTED PAPERS
@@ -148,16 +129,41 @@ Rules:
 _MAX_RETRIES = 3
 
 
-def _chat(llm_client, model: str, messages: list[dict], retries: int = _MAX_RETRIES) -> Any:
-    """Send messages to Ollama, retrying if no parseable JSON is returned."""
+def _chat(llm_client, model: str, messages: list[dict], temperature: float = 0.2, retries: int = _MAX_RETRIES) -> Any:
+    """Send messages to Ollama with retry logic, returning parsed JSON."""
     last_exc: Exception = RuntimeError("No attempts made")
-    for attempt in range(1, retries + 1):
-        raw = llm_client.chat(model=model, messages=messages)["message"]["content"]
+    for _ in range(1, retries + 1):
+        raw = llm_client.chat(
+            model=model,
+            messages=messages,
+            options={"temperature": temperature},
+        )["message"]["content"]
         try:
             return _extract_json(raw)
         except (ValueError, json.JSONDecodeError) as exc:
             last_exc = exc
     raise ValueError(f"No JSON after {retries} attempts. Last error: {last_exc}")
+
+
+def _chat_with_fallback(
+    llm_client, models: list[str], messages: list[dict], temperature: float = 0.2
+) -> Any:
+    """Try each model in order, falling back to the next on failure."""
+    last_error: Exception | None = None
+    for model in models:
+        if not model:
+            continue
+        try:
+            return _chat(llm_client, model, messages, temperature)
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"All models failed: {last_error}")
+
+
+def _normalize_models(models) -> list[str]:
+    if isinstance(models, str):
+        return [models]
+    return list(models)
 
 
 def _extract_json(text: str) -> Any:
@@ -178,7 +184,6 @@ def _extract_json(text: str) -> Any:
                     try:
                         return json.loads(candidate)
                     except json.JSONDecodeError:
-                        # LLM returned malformed JSON — attempt automatic repair
                         return json.loads(repair_json(candidate))
     raise ValueError("No JSON found in LLM response")
 
@@ -193,10 +198,8 @@ def _normalise(data: Any) -> Any:
     """Coerce fields that must be strings but LLMs sometimes return as lists."""
     if isinstance(data, list):
         if len(data) == 1 and isinstance(data[0], dict):
-            # unwrap single-element list: [{ ... }] → { ... }
             data = data[0]
         elif data and all(isinstance(item, dict) for item in data):
-            # bare array of results: [{...}, {...}] → {"results": [...]}
             data = {"results": data}
         else:
             data = {}
@@ -218,7 +221,6 @@ def _fill_missing_strings(data: dict) -> None:
     expanded = data.get("string_expanded", "").strip()
     full = data.get("string_full", "").strip()
 
-    # Build expanded from core + synonyms when missing
     if not expanded and core:
         synonyms: list[dict] = data.get("synonyms_added") or []
         base = core
@@ -232,14 +234,20 @@ def _fill_missing_strings(data: dict) -> None:
         data["string_expanded"] = base if base != core else core
         expanded = data["string_expanded"]
 
-    # Build full from expanded + year filter when missing
     if not full and expanded:
         data["string_full"] = f"({expanded}) AND PUBYEAR > 2015"
 
 
 # ── Core agent functions ───────────────────────────────────────────────────────
 
-def optimize_query(llm_client, model: str, user_query: str, on_step=None) -> dict:
+def optimize_query(
+    llm_client,
+    models,
+    user_query: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
+    on_step=None,
+) -> dict:
     """Return optimized Scopus strings for the given natural-language query."""
     def step(msg):
         if on_step:
@@ -247,7 +255,7 @@ def optimize_query(llm_client, model: str, user_query: str, on_step=None) -> dic
 
     step("Analisando a questão de pesquisa...")
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
@@ -256,15 +264,22 @@ def optimize_query(llm_client, model: str, user_query: str, on_step=None) -> dic
             ),
         },
     ]
-    step(f"Consultando modelo de linguagem (`{model}`)...")
-    result = _chat(llm_client, model, messages)
+    step("Consultando modelo de linguagem...")
+    result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     step("Extraindo palavras-chave e autores de referência...")
     step("Construindo strings Core, Expanded e Full...")
     return _normalise(result)
 
 
-def simulate_results(llm_client, model: str, search_string: str, on_step=None) -> dict:
-    """Simulate up to 20 Scopus results for the given search string."""
+def simulate_results(
+    llm_client,
+    models,
+    search_string: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
+    on_step=None,
+) -> dict:
+    """Simulate Scopus results for the given search string."""
     def step(msg):
         if on_step:
             on_step(msg)
@@ -277,19 +292,21 @@ def simulate_results(llm_client, model: str, search_string: str, on_step=None) -
             "content": f"Generate 5 results for this search string: {search_string}",
         },
     ]
-    step(f"Gerando resultados acadêmicos simulados (`{model}`)...")
-    result = _chat(llm_client, model, messages)
+    step("Gerando resultados acadêmicos simulados...")
+    result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     step("Formatando lista de artigos...")
     return _normalise(result)
 
 
 def refine_query(
     llm_client,
-    model: str,
+    models,
     original_query: str,
     current_string: str,
     selected_ids: list[str],
     results: list[dict],
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
     on_step=None,
 ) -> dict:
     """Refine the search string based on papers the user marked as relevant."""
@@ -318,7 +335,7 @@ def refine_query(
         )
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
@@ -328,7 +345,7 @@ def refine_query(
             ),
         },
     ]
-    step(f"Refinando string de busca com o modelo (`{model}`)...")
-    result = _chat(llm_client, model, messages)
+    step("Refinando string de busca com o modelo...")
+    result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     step("Normalizando nova string otimizada...")
     return _normalise(result)

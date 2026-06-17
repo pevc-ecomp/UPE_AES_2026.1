@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
@@ -39,6 +40,7 @@ def _build_agent_read(agent: Agent, session: Session) -> AgentRead:
         id=agent.id,
         name=agent.name,
         description=agent.description,
+        agent_type=agent.agent_type,
         active_version_id=agent.active_version_id,
         active_version=AgentVersionRead.model_validate(active_version) if active_version else None,
         versions=[AgentVersionRead.model_validate(v) for v in versions],
@@ -57,8 +59,11 @@ def _get_agent_or_404(agent_id: str, session: Session) -> Agent:
 # ── Agent CRUD ────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[AgentRead])
-def list_agents(session: Session = Depends(get_session)):
-    agents = session.exec(select(Agent).order_by(Agent.created_at)).all()
+def list_agents(agent_type: Optional[str] = None, session: Session = Depends(get_session)):
+    query = select(Agent).order_by(Agent.created_at)
+    if agent_type:
+        query = query.where(Agent.agent_type == agent_type)
+    agents = session.exec(query).all()
     return [_build_agent_read(a, session) for a in agents]
 
 
@@ -67,7 +72,7 @@ def create_agent(payload: AgentCreate, session: Session = Depends(get_session)):
     if session.exec(select(Agent).where(Agent.name == payload.name)).first():
         raise HTTPException(400, f"Agent '{payload.name}' already exists")
 
-    agent = Agent(name=payload.name, description=payload.description)
+    agent = Agent(name=payload.name, description=payload.description, agent_type=payload.agent_type)
     session.add(agent)
     session.flush()
 
@@ -93,7 +98,11 @@ async def evaluate_article_endpoint(
         if not agent:
             raise HTTPException(404, f"Agent '{request.agent_id}' not found")
     else:
-        agent = session.exec(select(Agent).where(Agent.name == "article-evaluator")).first()
+        agent = session.exec(
+            select(Agent).where(Agent.agent_type == "article-evaluator")
+        ).first()
+        if not agent:
+            agent = session.exec(select(Agent).where(Agent.name == "article-evaluator")).first()
         if not agent:
             agent = session.exec(select(Agent).limit(1)).first()
         if not agent:
@@ -135,6 +144,9 @@ def update_agent(
 
     if payload.description is not None:
         agent.description = payload.description
+
+    if payload.agent_type is not None:
+        agent.agent_type = payload.agent_type
 
     agent.updated_at = _now()
     session.add(agent)
