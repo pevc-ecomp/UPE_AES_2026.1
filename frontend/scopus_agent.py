@@ -97,6 +97,31 @@ When the user finds NO results relevant:
 - Never truncate JSON responses — always close all brackets
 - Use realistic citation counts (recent papers: 0–30, older foundational papers: 50–500+)"""
 
+OPTIMIZE_PROMPT = """You are a Scopus search expert. Given a research query, build optimized Scopus search strings.
+
+Respond ONLY with the JSON below. Replace EVERY value with real content from the query. Do NOT output example text, do NOT output "...".
+
+{
+  "strategy_explanation": "1-2 sentences describing the search strategy",
+  "keywords_extracted": ["keyword1", "keyword2", "keyword3"],
+  "synonyms_added": [{"term": "keyword1", "synonyms": ["synonym1a", "synonym1b"]}],
+  "reference_authors": [{"name": "Lastname, Firstname", "reason": "key researcher in this area"}],
+  "string_core": "TITLE-ABS-KEY(\"keyword1\" AND \"keyword2\")",
+  "string_expanded": "TITLE-ABS-KEY((\"keyword1\" OR \"synonym1a\") AND (\"keyword2\" OR \"synonym2a\"))",
+  "string_full": "TITLE-ABS-KEY((\"keyword1\" OR \"synonym1a\") AND (\"keyword2\" OR \"synonym2a\")) AND PUBYEAR > 2015",
+  "recommended_string": "expanded",
+  "recommended_reason": "1 sentence justification"
+}
+
+Rules:
+- Output ONLY the JSON above, no extra text.
+- string_core: join the main keywords with AND inside TITLE-ABS-KEY().
+- string_expanded: add synonyms with OR, keep AND between concepts.
+- string_full: copy expanded and append AND PUBYEAR > 2015.
+- recommended_string must be exactly one of: core, expanded, full.
+- Never output placeholder text or "..."."""
+
+
 SIMULATE_PROMPT = """You are an academic database assistant. Your ONLY task is to simulate Scopus search results.
 
 Given a Scopus search string, return ONLY a JSON object in this exact format (no markdown, no preamble, no extra keys):
@@ -215,25 +240,59 @@ def _normalise(data: Any) -> Any:
     return data
 
 
+_PLACEHOLDER_PATTERNS = {
+    "...", "core | expanded | full",
+    "TITLE-ABS-KEY(main concept AND secondary concept)",
+    "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2))",
+}
+
+
+def _is_placeholder(val: str) -> bool:
+    return (
+        not val
+        or val.strip() in _PLACEHOLDER_PATTERNS
+        or "main concept" in val
+        or "secondary concept" in val
+        or val.strip() == "..."
+    )
+
+
 def _fill_missing_strings(data: dict) -> None:
-    """Derive expanded/full strings when the LLM left them empty."""
+    """Clear placeholder values and derive missing strings from keywords."""
+    # Clear known placeholders
+    for f in ("string_core", "string_expanded", "string_full"):
+        if _is_placeholder(data.get(f, "")):
+            data[f] = ""
+
+    if data.get("recommended_string") not in ("core", "expanded", "full"):
+        data["recommended_string"] = "expanded"
+
     core = data.get("string_core", "").strip()
     expanded = data.get("string_expanded", "").strip()
     full = data.get("string_full", "").strip()
 
+    # Build core from keywords if still missing
+    if not core:
+        keywords = [k for k in data.get("keywords_extracted", []) if isinstance(k, str) and k.strip()]
+        if keywords:
+            kw_str = " AND ".join(f'"{k.strip()}"' for k in keywords[:4])
+            core = f"TITLE-ABS-KEY({kw_str})"
+            data["string_core"] = core
+
+    # Build expanded from core + synonyms
     if not expanded and core:
         synonyms: list[dict] = data.get("synonyms_added") or []
         base = core
         for entry in synonyms:
-            term = entry.get("term", "")
-            syns = entry.get("synonyms") or []
+            term = (entry.get("term") or "").strip()
+            syns = [s for s in (entry.get("synonyms") or []) if isinstance(s, str) and s.strip()]
             if term and syns:
                 all_terms = " OR ".join(f'"{s}"' for s in [term] + syns)
                 base = base.replace(f'"{term}"', f"({all_terms})", 1)
-                base = base.replace(term, f"({all_terms})", 1)
-        data["string_expanded"] = base if base != core else core
+        data["string_expanded"] = base
         expanded = data["string_expanded"]
 
+    # Build full from expanded
     if not full and expanded:
         data["string_full"] = f"({expanded}) AND PUBYEAR > 2015"
 
@@ -255,13 +314,10 @@ def optimize_query(
 
     step("Analisando a questão de pesquisa...")
     messages = [
-        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or OPTIMIZE_PROMPT},
         {
             "role": "user",
-            "content": (
-                f"Optimize the following research query for Scopus and return "
-                f"ONLY valid JSON as specified:\n\n{user_query}"
-            ),
+            "content": f"Research query: {user_query}",
         },
     ]
     step("Consultando modelo de linguagem...")

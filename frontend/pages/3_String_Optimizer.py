@@ -35,10 +35,9 @@ with st.sidebar:
     agent_temperature  = 0.2
 
     try:
-        agents_resp = httpx.get(
-            f"{BACKEND_URL}/agents", params={"agent_type": "scopus-agent"}, timeout=10
-        )
-        agents_list = agents_resp.json() if agents_resp.status_code == 200 else []
+        agents_resp = httpx.get(f"{BACKEND_URL}/agents", timeout=10)
+        all_agents  = agents_resp.json() if agents_resp.status_code == 200 else []
+        agents_list = [a for a in all_agents if a.get("agent_type") == "scopus-agent"]
     except Exception:
         agents_list = []
 
@@ -148,7 +147,15 @@ if st.session_state.opt_result:
     st.divider()
     st.subheader("2️⃣ Strings Otimizadas")
 
-    st.info(f"**Estratégia:** {opt.get('strategy_explanation', '')}")
+    if not opt.get("string_core"):
+        st.warning(
+            "O modelo não gerou as strings de busca. "
+            "Tente novamente ou verifique se o Ollama está respondendo corretamente."
+        )
+        with st.expander("Resposta bruta do modelo"):
+            st.json(opt)
+
+    st.info(f"**Estratégia:** {opt.get('strategy_explanation', '—')}")
 
     kw_col, auth_col = st.columns(2)
     with kw_col:
