@@ -75,7 +75,7 @@ Replace every value below with real content derived from the user's query — do
 }
 
 ## SIMULATED SCOPUS RESULTS
-Since you cannot call the real Scopus API, simulate 10 realistic academic results based on the search string. Each result must be plausible, academically formatted, and relevant to the query. Generate results that reflect diversity in year (2018–2024), journal, and methodology.
+Since you cannot call the real Scopus API, simulate up to 20 realistic academic results based on the search string. Each result must be plausible, academically formatted, and relevant to the query. Generate results that reflect diversity in year (2018–2024), journal, and methodology.
 
 When returning results, respond ONLY with valid JSON:
 {
@@ -115,6 +115,32 @@ When the user finds NO results relevant:
 - Always maintain academic rigor in terminology
 - Never truncate JSON responses — always close all brackets
 - Use realistic citation counts (recent papers: 0–30, older foundational papers: 50–500+)"""
+
+SIMULATE_PROMPT = """You are an academic database assistant. Your ONLY task is to simulate Scopus search results.
+
+Given a Scopus search string, return ONLY a JSON object in this exact format (no markdown, no preamble, no extra keys):
+{
+  "results": [
+    {
+      "id": "S001",
+      "title": "Full paper title here",
+      "authors": ["Surname, Firstname", "Surname2, Firstname2"],
+      "journal": "Journal Name",
+      "year": 2022,
+      "citations": 34,
+      "doi": "10.1016/example.2022.001",
+      "keywords": ["keyword1", "keyword2", "keyword3"],
+      "abstract_snippet": "Two-sentence summary of what this paper is about and its main finding."
+    }
+  ]
+}
+
+Rules:
+- Return ONLY the JSON object above, nothing else.
+- Generate exactly 5 results relevant to the search string.
+- Vary years between 2015 and 2024, journals, and methodologies.
+- Use realistic but fictional DOIs and author names.
+- Never truncate — always close all brackets and braces."""
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -166,8 +192,14 @@ _STR_FIELDS = {
 def _normalise(data: Any) -> Any:
     """Coerce fields that must be strings but LLMs sometimes return as lists."""
     if isinstance(data, list):
-        # unwrap [{ ... }] → { ... }
-        data = data[0] if len(data) == 1 and isinstance(data[0], dict) else {}
+        if len(data) == 1 and isinstance(data[0], dict):
+            # unwrap single-element list: [{ ... }] → { ... }
+            data = data[0]
+        elif data and all(isinstance(item, dict) for item in data):
+            # bare array of results: [{...}, {...}] → {"results": [...]}
+            data = {"results": data}
+        else:
+            data = {}
     if not isinstance(data, dict):
         return data
     for field in _STR_FIELDS:
@@ -176,13 +208,44 @@ def _normalise(data: Any) -> Any:
             data[field] = val[0] if val else ""
         elif val is not None and not isinstance(val, str):
             data[field] = str(val)
+    _fill_missing_strings(data)
     return data
+
+
+def _fill_missing_strings(data: dict) -> None:
+    """Derive expanded/full strings when the LLM left them empty."""
+    core = data.get("string_core", "").strip()
+    expanded = data.get("string_expanded", "").strip()
+    full = data.get("string_full", "").strip()
+
+    # Build expanded from core + synonyms when missing
+    if not expanded and core:
+        synonyms: list[dict] = data.get("synonyms_added") or []
+        base = core
+        for entry in synonyms:
+            term = entry.get("term", "")
+            syns = entry.get("synonyms") or []
+            if term and syns:
+                all_terms = " OR ".join(f'"{s}"' for s in [term] + syns)
+                base = base.replace(f'"{term}"', f"({all_terms})", 1)
+                base = base.replace(term, f"({all_terms})", 1)
+        data["string_expanded"] = base if base != core else core
+        expanded = data["string_expanded"]
+
+    # Build full from expanded + year filter when missing
+    if not full and expanded:
+        data["string_full"] = f"({expanded}) AND PUBYEAR > 2015"
 
 
 # ── Core agent functions ───────────────────────────────────────────────────────
 
-def optimize_query(llm_client, model: str, user_query: str) -> dict:
+def optimize_query(llm_client, model: str, user_query: str, on_step=None) -> dict:
     """Return optimized Scopus strings for the given natural-language query."""
+    def step(msg):
+        if on_step:
+            on_step(msg)
+
+    step("Analisando a questão de pesquisa...")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -193,22 +256,31 @@ def optimize_query(llm_client, model: str, user_query: str) -> dict:
             ),
         },
     ]
-    return _normalise(_chat(llm_client, model, messages))
+    step(f"Consultando modelo de linguagem (`{model}`)...")
+    result = _chat(llm_client, model, messages)
+    step("Extraindo palavras-chave e autores de referência...")
+    step("Construindo strings Core, Expanded e Full...")
+    return _normalise(result)
 
 
-def simulate_results(llm_client, model: str, search_string: str) -> dict:
-    """Simulate 5 Scopus results for the given search string."""
+def simulate_results(llm_client, model: str, search_string: str, on_step=None) -> dict:
+    """Simulate up to 20 Scopus results for the given search string."""
+    def step(msg):
+        if on_step:
+            on_step(msg)
+
+    step("Processando string de busca ativa...")
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SIMULATE_PROMPT},
         {
             "role": "user",
-            "content": (
-                f"Simulate 5 realistic Scopus results for the following search "
-                f"string and return ONLY valid JSON as specified:\n\n{search_string}"
-            ),
+            "content": f"Generate 5 results for this search string: {search_string}",
         },
     ]
-    return _normalise(_chat(llm_client, model, messages))
+    step(f"Gerando resultados acadêmicos simulados (`{model}`)...")
+    result = _chat(llm_client, model, messages)
+    step("Formatando lista de artigos...")
+    return _normalise(result)
 
 
 def refine_query(
@@ -218,18 +290,26 @@ def refine_query(
     current_string: str,
     selected_ids: list[str],
     results: list[dict],
+    on_step=None,
 ) -> dict:
     """Refine the search string based on papers the user marked as relevant."""
+    def step(msg):
+        if on_step:
+            on_step(msg)
+
     selected_papers = [r for r in results if r["id"] in selected_ids]
     papers_text = json.dumps(selected_papers, ensure_ascii=False, indent=2)
 
     if not selected_papers:
+        step("Nenhum artigo selecionado — preparando pivot de abordagem...")
         instruction = (
             "The user found NO relevant results. Pivot to adjacent/related topics, "
             "broaden the conceptual scope, and generate a new optimized string. "
             "Return ONLY valid JSON as specified."
         )
     else:
+        step(f"Analisando {len(selected_papers)} artigo(s) marcado(s) como relevante(s)...")
+        step("Identificando padrões, termos e coautores recorrentes...")
         instruction = (
             f"The user marked the following papers as relevant. Extract new keywords, "
             f"identify patterns, and refine the search string to capture their semantic "
@@ -248,4 +328,7 @@ def refine_query(
             ),
         },
     ]
-    return _normalise(_chat(llm_client, model, messages))
+    step(f"Refinando string de busca com o modelo (`{model}`)...")
+    result = _chat(llm_client, model, messages)
+    step("Normalizando nova string otimizada...")
+    return _normalise(result)

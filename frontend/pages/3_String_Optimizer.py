@@ -6,12 +6,12 @@ import streamlit as st
 from scopus_agent import optimize_query, simulate_results, refine_query
 
 st.set_page_config(
-    page_title="Scopus Agent",
+    page_title="String Optimizer",
     page_icon="🔎",
     layout="wide",
 )
 
-st.title("🔎 Scopus Agent")
+st.title("🔎 String Optimizer")
 st.markdown(
     "Construa strings de busca otimizadas para o Scopus e simule resultados "
     "com refinamento iterativo por seleção de artigos relevantes."
@@ -56,7 +56,7 @@ def get_llm():
 
 
 # ── Step 1 — Research question ────────────────────────────────────────────────
-st.subheader("1️⃣ Questão de Pesquisa")
+st.subheader("1️⃣ String de Busca")
 
 query = st.text_area(
     "Descreva sua questão de pesquisa em linguagem natural:",
@@ -71,18 +71,24 @@ if optimize_btn:
         st.warning("Digite uma questão de pesquisa.")
         st.stop()
 
-    with st.spinner("Construindo strings otimizadas..."):
+    with st.status("Otimizando string de busca...", expanded=True) as status:
         try:
-            result = optimize_query(get_llm(), model, query)
+            result = optimize_query(get_llm(), model, query, on_step=st.write)
             st.session_state.opt_result     = result
             st.session_state.original_query = query
-            st.session_state.active_string  = result.get(
-                "string_" + result.get("recommended_string", "expanded"), ""
-            ) or result.get("string_expanded", "")
+            _rec = result.get("recommended_string") or "expanded"
+            st.session_state.active_string = (
+                result.get(f"string_{_rec}")
+                or result.get("string_expanded")
+                or result.get("string_core")
+                or ""
+            )
             st.session_state.sim_results  = []
             st.session_state.selected_ids = []
             st.session_state.iteration    = 1
+            status.update(label="String otimizada com sucesso!", state="complete", expanded=False)
         except Exception as e:
+            status.update(label="Erro na otimização", state="error", expanded=True)
             st.error(f"Erro ao otimizar query: {e}")
             st.stop()
 
@@ -101,7 +107,10 @@ if st.session_state.opt_result:
     with auth_col:
         st.markdown("**Autores de referência:**")
         for a in opt.get("reference_authors", []):
-            st.caption(f"• **{a['name']}** — {a['reason']}")
+            if isinstance(a, dict):
+                name = a.get("name") or a.get("author") or a.get("surname") or str(a)
+                reason = a.get("reason") or a.get("justification") or ""
+                st.caption(f"• **{name}** — {reason}")
 
     st.markdown("---")
     tab_core, tab_exp, tab_full = st.tabs(["Core", "Expanded", "Full"])
@@ -113,10 +122,18 @@ if st.session_state.opt_result:
     with tab_full:
         st.code(opt.get("string_full", ""), language="text")
 
-    rec = opt.get("recommended_string", "expanded")
-    st.success(
-        f"**String recomendada:** `{rec}` — {opt.get('recommended_reason', '')}"
+    rec_name = opt.get("recommended_string") or "expanded"
+    rec_string = (
+        opt.get(f"string_{rec_name}")
+        or opt.get("string_expanded")
+        or opt.get("string_core")
+        or ""
     )
+    with st.container(border=True):
+        st.markdown(
+            f"**String recomendada** (`{rec_name}`) — {opt.get('recommended_reason', '')}"
+        )
+        st.code(rec_string, language="text")
 
     # Allow the user to edit the active string before simulating
     st.session_state.active_string = st.text_area(
@@ -131,14 +148,24 @@ if st.session_state.opt_result:
     )
 
     if simulate_btn:
-        with st.spinner("Simulando resultados acadêmicos..."):
+        with st.status("Simulando resultados Scopus...", expanded=True) as status:
             try:
-                sim = simulate_results(get_llm(), model, st.session_state.active_string)
-                st.session_state.sim_results  = sim.get("results", [])
+                sim = simulate_results(get_llm(), model, st.session_state.active_string, on_step=st.write)
+                results = sim.get("results", [])
+                if not results:
+                    raise ValueError(f"O modelo não retornou artigos. Resposta recebida: {sim}")
+                st.session_state.sim_results  = results
                 st.session_state.selected_ids = []
+                status.update(
+                    label=f"Resultados simulados com sucesso! ({len(results)} artigos)",
+                    state="complete",
+                    expanded=False,
+                )
             except Exception as e:
+                status.update(label="Erro na simulação", state="error", expanded=True)
                 st.error(f"Erro ao simular resultados: {e}")
                 st.stop()
+        st.rerun()
 
 # ── Step 3 — Simulated results ────────────────────────────────────────────────
 if st.session_state.sim_results:
@@ -201,7 +228,7 @@ if st.session_state.sim_results:
     )
 
     if refine_btn:
-        with st.spinner("Refinando string de busca..."):
+        with st.status("Refinando string de busca...", expanded=True) as status:
             try:
                 refined = refine_query(
                     get_llm(),
@@ -210,16 +237,23 @@ if st.session_state.sim_results:
                     st.session_state.active_string,
                     st.session_state.selected_ids,
                     st.session_state.sim_results,
+                    on_step=st.write,
                 )
                 st.session_state.opt_result    = refined
-                st.session_state.active_string = refined.get(
-                    "string_" + refined.get("recommended_string", "expanded"), ""
-                ) or refined.get("string_expanded", "")
+                _rec = refined.get("recommended_string") or "expanded"
+                st.session_state.active_string = (
+                    refined.get(f"string_{_rec}")
+                    or refined.get("string_expanded")
+                    or refined.get("string_core")
+                    or ""
+                )
                 st.session_state.sim_results  = []
                 st.session_state.selected_ids = []
                 st.session_state.iteration   += 1
+                status.update(label="String refinada com sucesso!", state="complete", expanded=False)
                 st.rerun()
             except Exception as e:
+                status.update(label="Erro no refinamento", state="error", expanded=True)
                 st.error(f"Erro ao refinar query: {e}")
 
     # ── Export ────────────────────────────────────────────────────────────────
