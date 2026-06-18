@@ -5,7 +5,7 @@ import httpx
 import ollama
 import streamlit as st
 
-from scopus_agent import DEFAULT_SYSTEM_PROMPT, optimize_query, simulate_results, refine_query
+from scopus_agent import optimize_query, simulate_results, refine_query
 
 st.set_page_config(
     page_title="String Optimizer",
@@ -30,7 +30,7 @@ with st.sidebar:
     st.header("🤖 Agente")
 
     selected_agent_id  = None
-    system_prompt      = DEFAULT_SYSTEM_PROMPT
+    system_prompt      = None  # None → optimize_query usa OPTIMIZE_PROMPT (curto, compatível com phi3:mini)
     agent_models       = [DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL]
     agent_temperature  = 0.2
 
@@ -68,7 +68,11 @@ with st.sidebar:
         else:
             st.warning("Agente sem versão ativa — usando configuração padrão.")
     else:
-        st.warning("Nenhum agente 'scopus-agent' configurado — usando configuração padrão.")
+        st.warning(
+            "Nenhum agente 'scopus-agent' encontrado no backend — usando configuração padrão. "
+            "Para configurar, reinicie o container do backend: "
+            "`docker compose build backend && docker compose up -d backend`"
+        )
 
     st.caption(f"Host Ollama: `{OLLAMA_HOST}`")
     st.divider()
