@@ -1,4 +1,5 @@
 import json
+import re
 
 from app.llm_client import ask_llm
 from app.schemas import (
@@ -8,6 +9,7 @@ from app.schemas import (
     SearchStringJudgeRequest,
     SearchStringJudgeResponse,
 )
+from pydantic import ValidationError
 
 
 def _extract_json_object(raw_response: str) -> dict:
@@ -123,6 +125,229 @@ def _compute_search_string_final_score(criteria) -> float:
     return round(sum(scores) / len(scores), 2)
 
 
+def _normalize_search_string_for_analysis(search_string: str) -> str:
+    normalized = search_string or ""
+    field_patterns = [
+        r"TITLE-ABS-KEY\s*\(",
+        r"TITLE-KEY-ABS\s*\(",
+        r"TITLE-ABS\s*\(",
+        r"TITLE\s*\(",
+        r"ABS\s*\(",
+        r"KEY\s*\(",
+        r"TS\s*=\s*\(",
+        r"ALL\s*\(",
+    ]
+
+    for pattern in field_patterns:
+        normalized = re.sub(pattern, "(", normalized, flags=re.IGNORECASE)
+
+    return normalized
+
+
+def _extract_search_terms(search_string: str) -> list[str]:
+    normalized = _normalize_search_string_for_analysis(search_string)
+    quoted_terms = [term.strip() for term in re.findall(r'"([^"]+)"', normalized) if term.strip()]
+    unquoted_source = re.sub(r'"[^"]+"', " ", normalized)
+    raw_tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", unquoted_source)
+    filtered_tokens = [
+        token
+        for token in raw_tokens
+        if token.upper() not in {"AND", "OR", "NOT"}
+    ]
+    return quoted_terms + filtered_tokens
+
+
+def _count_boolean_operators(search_string: str) -> dict[str, int]:
+    return {
+        "AND": len(re.findall(r"\bAND\b", search_string, flags=re.IGNORECASE)),
+        "OR": len(re.findall(r"\bOR\b", search_string, flags=re.IGNORECASE)),
+        "NOT": len(re.findall(r"\bNOT\b", search_string, flags=re.IGNORECASE)),
+    }
+
+
+def _has_balanced_parentheses(search_string: str) -> bool:
+    balance = 0
+    for char in search_string:
+        if char == "(":
+            balance += 1
+        elif char == ")":
+            balance -= 1
+            if balance < 0:
+                return False
+    return balance == 0
+
+
+def _score_with_justification(score: float, justification: str) -> dict:
+    return {"score": round(max(0.0, min(5.0, score)), 2), "justification": justification}
+
+
+def _infer_database_compatibility(search_string: str, database: str) -> tuple[float, str]:
+    database_name = (database or "").strip().lower()
+    upper_string = search_string.upper()
+
+    compatibility_rules = {
+        "scopus": ["TITLE-ABS-KEY("],
+        "web of science": ["TS="],
+        "wos": ["TS="],
+        "ieee": ["\"Document Title\":"],
+        "acm": ["Title:(", "Abstract:(", "Keyword:("],
+    }
+
+    expected_patterns = []
+    for key, patterns in compatibility_rules.items():
+        if key in database_name:
+            expected_patterns = patterns
+            break
+
+    if not expected_patterns:
+        return 4.0, "Uses standard boolean structure compatible with most databases."
+
+    if any(pattern.upper() in upper_string for pattern in expected_patterns):
+        return 5.0, f"Uses field syntax expected by {database or 'the selected database'}."
+
+    if re.search(r"\bAND\b|\bOR\b|\bNOT\b", search_string, flags=re.IGNORECASE):
+        return 3.5, f"Boolean syntax is valid, but field tags are not specific to {database or 'the database'}."
+
+    return 2.0, f"String does not clearly match the expected syntax for {database or 'the database'}."
+
+
+def _build_search_string_fallback(data: SearchStringJudgeRequest) -> dict:
+    terms = _extract_search_terms(data.search_string)
+    unique_terms = list(dict.fromkeys(term.lower() for term in terms))
+    boolean_counts = _count_boolean_operators(data.search_string)
+    total_boolean_ops = sum(boolean_counts.values())
+    has_quotes = '"' in data.search_string
+    balanced_parentheses = _has_balanced_parentheses(data.search_string)
+    normalized = _normalize_search_string_for_analysis(data.search_string)
+    top_level_groups = [
+        group.strip()
+        for group in re.split(r"\bAND\b", normalized, flags=re.IGNORECASE)
+        if group.strip()
+    ]
+
+    concept_score = 4.5 if len(top_level_groups) >= 2 and len(unique_terms) >= 2 else 2.5
+    concept_justification = (
+        "Covers more than one core concept of the topic."
+        if concept_score >= 4
+        else "Covers few core concepts and may miss part of the topic."
+    )
+
+    synonym_score = 4.5 if boolean_counts["OR"] >= 1 else 2.0
+    synonym_justification = (
+        "Includes alternative terms with OR."
+        if synonym_score >= 4
+        else "Does not show many synonyms or alternative spellings."
+    )
+
+    boolean_score = 5.0 if total_boolean_ops >= 1 and balanced_parentheses else 2.0
+    boolean_justification = (
+        "Uses boolean operators and balanced grouping correctly."
+        if boolean_score >= 4
+        else "Boolean structure is weak or grouping is unbalanced."
+    )
+
+    compatibility_score, compatibility_justification = _infer_database_compatibility(
+        data.search_string,
+        data.database or "",
+    )
+
+    recall_score = 4.0 if boolean_counts["OR"] >= 2 else 3.0 if boolean_counts["OR"] >= 1 else 2.0
+    recall_justification = (
+        "Recall is helped by alternative terms."
+        if recall_score >= 3
+        else "Recall may be limited because few alternatives are present."
+    )
+
+    precision_score = 4.5 if has_quotes and len(unique_terms) >= 2 else 3.0
+    precision_justification = (
+        "Quoted phrases and field restrictions improve precision."
+        if precision_score >= 4
+        else "Precision is acceptable but could be improved with more specific phrasing."
+    )
+
+    identified_problems = []
+    improvement_suggestions = []
+
+    if boolean_counts["OR"] == 0:
+        identified_problems.append("Few or no synonyms were included.")
+        improvement_suggestions.append("Add synonyms or variant expressions with OR.")
+
+    if not balanced_parentheses:
+        identified_problems.append("Parentheses are unbalanced.")
+        improvement_suggestions.append("Review grouping parentheses to avoid syntax errors.")
+
+    if not has_quotes:
+        improvement_suggestions.append("Use quotes for multi-word phrases when supported by the database.")
+
+    return {
+        "type": "SEARCH_STRING_JUDGE",
+        "criteria": {
+            "conceptual_coverage": _score_with_justification(concept_score, concept_justification),
+            "synonym_quality": _score_with_justification(synonym_score, synonym_justification),
+            "boolean_operators": _score_with_justification(boolean_score, boolean_justification),
+            "database_compatibility": _score_with_justification(
+                compatibility_score,
+                compatibility_justification,
+            ),
+            "recall_potential": _score_with_justification(recall_score, recall_justification),
+            "precision": _score_with_justification(precision_score, precision_justification),
+        },
+        "identified_problems": identified_problems,
+        "improvement_suggestions": improvement_suggestions,
+    }
+
+
+def _normalize_search_string_judge_response(parsed_response: dict, request: SearchStringJudgeRequest) -> dict:
+    fallback_response = _build_search_string_fallback(request)
+
+    raw_criteria = parsed_response.get("criteria", {})
+    if not isinstance(raw_criteria, dict):
+        raw_criteria = {}
+
+    normalized_criteria = {}
+    fallback_criteria = fallback_response["criteria"]
+
+    for criterion_name, fallback_criterion in fallback_criteria.items():
+        raw_criterion = raw_criteria.get(criterion_name, {})
+        if not isinstance(raw_criterion, dict):
+            raw_criterion = {}
+
+        score = _normalize_confidence_score(raw_criterion.get("score", fallback_criterion["score"]))
+        justification = str(raw_criterion.get("justification") or fallback_criterion["justification"])
+
+        if score == 0 and fallback_criterion["score"] > 0:
+            score = fallback_criterion["score"]
+            justification = fallback_criterion["justification"]
+
+        normalized_criteria[criterion_name] = {
+            "score": score,
+            "justification": justification,
+        }
+
+    identified_problems = parsed_response.get("identified_problems", [])
+    if not isinstance(identified_problems, list):
+        identified_problems = fallback_response["identified_problems"]
+
+    improvement_suggestions = parsed_response.get("improvement_suggestions", [])
+    if not isinstance(improvement_suggestions, list):
+        improvement_suggestions = fallback_response["improvement_suggestions"]
+
+    parsed_response["type"] = "SEARCH_STRING_JUDGE"
+    parsed_response["criteria"] = normalized_criteria
+    parsed_response["identified_problems"] = [str(item) for item in identified_problems if str(item).strip()]
+    parsed_response["improvement_suggestions"] = [
+        str(item) for item in improvement_suggestions if str(item).strip()
+    ]
+
+    if not parsed_response["identified_problems"]:
+        parsed_response["identified_problems"] = fallback_response["identified_problems"]
+
+    if not parsed_response["improvement_suggestions"]:
+        parsed_response["improvement_suggestions"] = fallback_response["improvement_suggestions"]
+
+    return parsed_response
+
+
 def _decision_from_score(final_score: float) -> str:
     if final_score >= 4:
         return "APPROVE"
@@ -178,6 +403,7 @@ def _article_risks(articles) -> list[str]:
 
 
 def judge_search_string(data: SearchStringJudgeRequest) -> dict:
+    normalized_search_string = _normalize_search_string_for_analysis(data.search_string)
     prompt = f"""
 Evaluate the search string below for a systematic literature review.
 
@@ -189,6 +415,9 @@ Target database:
 
 Search string:
 {data.search_string}
+
+Equivalent plain form for analysis:
+{normalized_search_string}
 
 Evaluation criteria:
 1. Conceptual coverage
@@ -226,9 +455,22 @@ Rules:
 - Keep justifications short and direct.
 - If the string is too generic, penalize precision and conceptual coverage.
 - If the string lacks synonyms, penalize synonym quality and recall potential.
+- Database field operators such as TITLE-ABS-KEY(...), TS=(...), TITLE(...), ABS(...), and KEY(...)
+  are valid search syntax and must not be treated as noise or as an error by themselves.
 """
-    parsed_response = _extract_json_object(ask_llm(prompt))
-    criteria = SearchStringJudgeCriteria.model_validate(parsed_response["criteria"])
+
+    try:
+        parsed_response = _extract_json_object(ask_llm(prompt))
+    except Exception:
+        parsed_response = {}
+
+    parsed_response = _normalize_search_string_judge_response(parsed_response, data)
+
+    try:
+        criteria = SearchStringJudgeCriteria.model_validate(parsed_response["criteria"])
+    except ValidationError:
+        criteria = SearchStringJudgeCriteria.model_validate(_build_search_string_fallback(data)["criteria"])
+
     final_score = _compute_search_string_final_score(criteria)
 
     result = SearchStringJudgeResponse(
