@@ -65,7 +65,8 @@ if client:
 # ── Descrição das páginas ────────────────────────────────────────────────────
 st.subheader("📋 Páginas disponíveis")
 
-p1, p2, p3, p4, p5 = st.columns(5)
+p1, p2, p3 = st.columns(3)
+p4, p5, p6 = st.columns(3)
 
 with p1:
     with st.container(border=True):
@@ -105,4 +106,12 @@ with p5:
         st.markdown(
             "Avalia a relevância de um artigo científico para uma pesquisa "
             "usando um agente LLM com guardrails anti-injeção."
+        )
+
+with p6:
+    with st.container(border=True):
+        st.markdown("### ⚖️ AI Judge")
+        st.markdown(
+            "Revisa strings de busca e decisões de classificação feitas por "
+            "outro modelo, retornando parecer estruturado e riscos."
         )

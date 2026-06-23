@@ -34,6 +34,83 @@ def _extract_json_object(raw_response: str) -> dict:
     return parsed
 
 
+def _normalize_judge_verdict(value: str) -> str:
+    normalized = (value or "").strip().upper()
+    verdict_map = {
+        "CORRECT": "CORRECT",
+        "APPROVE": "CORRECT",
+        "RIGHT": "CORRECT",
+        "OK": "CORRECT",
+        "UNCERTAIN": "UNCERTAIN",
+        "UNSURE": "UNCERTAIN",
+        "MAYBE": "UNCERTAIN",
+        "REVISE": "UNCERTAIN",
+        "INCORRECT": "INCORRECT",
+        "WRONG": "INCORRECT",
+        "REJECT": "INCORRECT",
+        "EXCLUDE": "INCORRECT",
+    }
+    return verdict_map.get(normalized, "UNCERTAIN")
+
+
+def _normalize_confidence_score(value) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(5.0, score))
+
+
+def _normalize_human_review_recommended(value, judge_verdict: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "1", "sim"}:
+            return True
+        if normalized in {"false", "no", "n", "0", "nao", "não"}:
+            return False
+    return judge_verdict != "CORRECT"
+
+
+def _normalize_article_judge_response(parsed_response: dict, request: ArticleClassificationJudgeRequest) -> dict:
+    raw_articles = parsed_response.get("articles", [])
+    if not isinstance(raw_articles, list):
+        raw_articles = []
+
+    normalized_articles = []
+    for index, source_article in enumerate(request.articles):
+        raw_article = raw_articles[index] if index < len(raw_articles) and isinstance(raw_articles[index], dict) else {}
+        judge_verdict = _normalize_judge_verdict(raw_article.get("judge_verdict", ""))
+        normalized_articles.append(
+            {
+                "title": str(raw_article.get("title") or source_article.title),
+                "model_classification": str(
+                    raw_article.get("model_classification") or source_article.model_classification
+                ),
+                "judge_verdict": judge_verdict,
+                "confidence_score": _normalize_confidence_score(raw_article.get("confidence_score", 0)),
+                "judge_justification": str(raw_article.get("judge_justification") or ""),
+                "human_review_recommended": _normalize_human_review_recommended(
+                    raw_article.get("human_review_recommended"),
+                    judge_verdict,
+                ),
+            }
+        )
+
+    parsed_response["type"] = "ARTICLE_CLASSIFICATION_JUDGE"
+    parsed_response["articles"] = normalized_articles
+    parsed_response["overall_result"] = "REVISE"
+    parsed_response["summary"] = str(parsed_response.get("summary") or "")
+
+    main_risks = parsed_response.get("main_risks", [])
+    if not isinstance(main_risks, list):
+        main_risks = [str(main_risks)] if main_risks else []
+    parsed_response["main_risks"] = [str(risk) for risk in main_risks if str(risk).strip()]
+
+    return parsed_response
+
+
 def _compute_search_string_final_score(criteria) -> float:
     scores = [
         criteria.conceptual_coverage.score,
@@ -228,6 +305,7 @@ Rules:
 - overall_result should be REJECT when many classifications appear incorrect.
 """
     parsed_response = _extract_json_object(ask_llm(prompt))
+    parsed_response = _normalize_article_judge_response(parsed_response, data)
     result = ArticleClassificationJudgeResponse.model_validate(parsed_response)
     result.overall_result = _overall_article_result(result.articles)
 
