@@ -381,16 +381,46 @@ if st.session_state.term_weights:
         "Edite abaixo antes de refazer a busca."
     )
 
-    new_string = st.text_area(
-        "String sugerida:",
-        value=st.session_state.suggested_string,
-        height=100,
-        key=f"suggested_string_input_{st.session_state.iteration}",
-        label_visibility="collapsed",
-    )
+    import streamlit.components.v1 as components
 
-    st.markdown("**Copiar string:**")
-    st.code(new_string, language="text")
+    col_text, col_btn = st.columns([10, 1])
+    with col_text:
+        new_string = st.text_area(
+            "String sugerida:",
+            value=st.session_state.suggested_string,
+            height=100,
+            key=f"suggested_string_input_{st.session_state.iteration}",
+            label_visibility="collapsed",
+        )
+    with col_btn:
+        st.write("")  # alinhamento vertical
+        st.write("")
+        copy_clicked = st.button(
+            "📋",
+            help="Copiar string para a área de transferência",
+            use_container_width=True,
+            key=f"copy_btn_{st.session_state.iteration}",
+        )
+
+    if copy_clicked:
+        components.html(
+            f"""<script>
+            (async () => {{
+                try {{
+                    await window.parent.navigator.clipboard.writeText({json.dumps(new_string)});
+                }} catch (e) {{
+                    const el = window.parent.document.createElement('textarea');
+                    el.value = {json.dumps(new_string)};
+                    window.parent.document.body.appendChild(el);
+                    el.select();
+                    window.parent.document.execCommand('copy');
+                    window.parent.document.body.removeChild(el);
+                }}
+            }})();
+            </script>""",
+            height=0,
+        )
+        st.toast("✅ String copiada para a área de transferência!")
 
     redo_btn = st.button(
         "🔄 Refazer busca com a nova string", type="primary", use_container_width=True
