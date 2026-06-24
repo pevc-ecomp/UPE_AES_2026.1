@@ -26,3 +26,6 @@ pandas==2.3.3
 
 # ── Reparo de JSON malformado vindo de LLMs pequenos ─────────────────────────
 json-repair==0.30.3
+
+# ── NLP: stemming para análise TF-IDF e pesos Rocchio ─────────────────────────
+nltk==3.9.1
