@@ -6,6 +6,7 @@ import ollama
 import streamlit as st
 
 from scopus_agent import optimize_query, simulate_results, refine_query
+from text_analysis import compute_tfidf, compute_term_weights
 
 st.set_page_config(
     page_title="String Optimizer",
@@ -87,12 +88,15 @@ with st.sidebar:
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for key, default in {
-    "opt_result":     None,
-    "sim_results":    [],
-    "selected_ids":   [],
-    "active_string":  "",
-    "original_query": "",
-    "iteration":      0,
+    "opt_result":        None,
+    "sim_results":       [],
+    "selected_ids":      [],
+    "active_string":     "",
+    "original_query":    "",
+    "iteration":         0,
+    "tfidf_data":        None,
+    "term_weights":      [],
+    "suggested_string":  "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -219,8 +223,13 @@ if st.session_state.opt_result:
                 results = sim.get("results", [])
                 if not results:
                     raise ValueError(f"O modelo não retornou artigos. Resposta recebida: {sim}")
-                st.session_state.sim_results  = results
-                st.session_state.selected_ids = []
+                st.session_state.sim_results      = results
+                st.session_state.selected_ids    = []
+                st.session_state.term_weights    = []
+                st.session_state.suggested_string = ""
+                st.write("Aplicando lematização e remoção de stop words...")
+                st.session_state.tfidf_data = compute_tfidf(results)
+                st.write("TF-IDF calculado sobre os artigos retornados.")
                 status.update(
                     label=f"Resultados simulados com sucesso! ({len(results)} artigos)",
                     state="complete",
@@ -288,40 +297,31 @@ if st.session_state.sim_results:
             "Nenhum artigo selecionado. Ao refinar, o agente fará um pivot de abordagem."
         )
 
-    refine_btn = st.button(
-        "🔁 Refinar busca com base na seleção", type="primary", use_container_width=True
+    analyze_btn = st.button(
+        "📊 Calcular pesos dos termos", type="primary", use_container_width=True,
+        disabled=(not st.session_state.tfidf_data),
     )
 
-    if refine_btn:
-        with st.status("Refinando string de busca...", expanded=True) as status:
-            try:
-                refined = refine_query(
-                    get_llm(),
-                    agent_models,
-                    st.session_state.original_query,
-                    st.session_state.active_string,
-                    st.session_state.selected_ids,
-                    st.session_state.sim_results,
-                    system_prompt=system_prompt,
-                    temperature=agent_temperature,
-                    on_step=st.write,
+    if analyze_btn:
+        if not st.session_state.selected_ids:
+            st.warning("Selecione ao menos um artigo relevante antes de calcular os pesos.")
+        else:
+            weights = compute_term_weights(
+                st.session_state.tfidf_data,
+                st.session_state.sim_results,
+                set(st.session_state.selected_ids),
+            )
+            st.session_state.term_weights = weights
+            # Build suggested string from top positive-weight terms
+            top_terms = [orig for _, w, orig in weights if w > 0][:8]
+            if top_terms:
+                terms_expr = " OR ".join(f'"{t}"' for t in top_terms)
+                st.session_state.suggested_string = (
+                    f"({st.session_state.active_string}) AND TITLE-ABS-KEY({terms_expr})"
                 )
-                st.session_state.opt_result    = refined
-                _rec = refined.get("recommended_string") or "expanded"
-                st.session_state.active_string = (
-                    refined.get(f"string_{_rec}")
-                    or refined.get("string_expanded")
-                    or refined.get("string_core")
-                    or ""
-                )
-                st.session_state.sim_results  = []
-                st.session_state.selected_ids = []
-                st.session_state.iteration   += 1
-                status.update(label="String refinada com sucesso!", state="complete", expanded=False)
-                st.rerun()
-            except Exception as e:
-                status.update(label="Erro no refinamento", state="error", expanded=True)
-                st.error(f"Erro ao refinar query: {e}")
+            else:
+                st.session_state.suggested_string = st.session_state.active_string
+            st.rerun()
 
     # ── Export ────────────────────────────────────────────────────────────────
     st.divider()
@@ -340,3 +340,120 @@ if st.session_state.sim_results:
         mime="application/json",
         use_container_width=True,
     )
+
+# ── Step 4 — Term weights & string suggestion ─────────────────────────────────
+if st.session_state.term_weights:
+    import pandas as pd
+
+    st.divider()
+    st.subheader("4️⃣ Pesos dos Termos e Refinamento de String")
+
+    weights = st.session_state.term_weights
+    positive = [(orig, w) for _, w, orig in weights if w > 0]
+    negative = [(orig, w) for _, w, orig in weights if w <= 0]
+
+    col_pos, col_neg = st.columns(2)
+
+    with col_pos:
+        st.markdown("**Termos com peso positivo** (favorecem relevância)")
+        if positive:
+            df_pos = pd.DataFrame(
+                [{"Termo": orig, "Peso": round(w, 4)} for orig, w in positive[:15]],
+            )
+            st.dataframe(df_pos, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum termo com peso positivo.")
+
+    with col_neg:
+        st.markdown("**Termos com peso negativo** (associados a não-relevantes)")
+        if negative:
+            df_neg = pd.DataFrame(
+                [{"Termo": orig, "Peso": round(w, 4)} for orig, w in negative[:15]],
+            )
+            st.dataframe(df_neg, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum termo com peso negativo.")
+
+    st.markdown("---")
+    st.markdown("**String de busca sugerida** (editável)")
+    st.caption(
+        "Os termos com maiores pesos positivos foram adicionados à string ativa. "
+        "Edite abaixo antes de refazer a busca."
+    )
+
+    import streamlit.components.v1 as components
+
+    col_text, col_btn = st.columns([10, 1])
+    with col_text:
+        new_string = st.text_area(
+            "String sugerida:",
+            value=st.session_state.suggested_string,
+            height=100,
+            key=f"suggested_string_input_{st.session_state.iteration}",
+            label_visibility="collapsed",
+        )
+    with col_btn:
+        st.write("")  # alinhamento vertical
+        st.write("")
+        copy_clicked = st.button(
+            "📋",
+            help="Copiar string para a área de transferência",
+            use_container_width=True,
+            key=f"copy_btn_{st.session_state.iteration}",
+        )
+
+    if copy_clicked:
+        components.html(
+            f"""<script>
+            (async () => {{
+                try {{
+                    await window.parent.navigator.clipboard.writeText({json.dumps(new_string)});
+                }} catch (e) {{
+                    const el = window.parent.document.createElement('textarea');
+                    el.value = {json.dumps(new_string)};
+                    window.parent.document.body.appendChild(el);
+                    el.select();
+                    window.parent.document.execCommand('copy');
+                    window.parent.document.body.removeChild(el);
+                }}
+            }})();
+            </script>""",
+            height=0,
+        )
+        st.toast("✅ String copiada para a área de transferência!")
+
+    redo_btn = st.button(
+        "🔄 Refazer busca com a nova string", type="primary", use_container_width=True
+    )
+
+    if redo_btn:
+        with st.status("Simulando resultados com a nova string...", expanded=True) as status:
+            try:
+                st.session_state.active_string = new_string
+                sim = simulate_results(
+                    get_llm(), agent_models, new_string,
+                    system_prompt=system_prompt,
+                    temperature=agent_temperature,
+                    on_step=st.write,
+                )
+                results = sim.get("results", [])
+                if not results:
+                    raise ValueError(f"O modelo não retornou artigos. Resposta: {sim}")
+                st.session_state.sim_results      = results
+                st.session_state.selected_ids    = []
+                st.session_state.term_weights    = []
+                st.session_state.suggested_string = ""
+                st.write("Aplicando lematização e remoção de stop words...")
+                st.session_state.tfidf_data = compute_tfidf(results)
+                st.write("TF-IDF calculado sobre os novos artigos.")
+                st.session_state.iteration += 1
+                status.update(
+                    label=f"Nova busca concluída! ({len(results)} artigos · iteração {st.session_state.iteration})",
+                    state="complete",
+                    expanded=False,
+                )
+            except Exception as e:
+                status.update(label="Erro na simulação", state="error", expanded=True)
+                st.error(f"Erro ao refazer busca: {e}")
+                st.stop()
+        st.rerun()
