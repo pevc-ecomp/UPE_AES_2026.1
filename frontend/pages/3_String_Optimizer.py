@@ -5,6 +5,7 @@ import httpx
 import ollama
 import streamlit as st
 
+from ai_judge_client import get_ai_judge_status, judge_search_string
 from scopus_agent import optimize_query, simulate_results, refine_query
 from text_analysis import compute_tfidf, compute_term_weights
 
@@ -24,6 +25,7 @@ st.divider()
 # ── LLM config (sidebar) ──────────────────────────────────────────────────────
 OLLAMA_HOST           = os.getenv("OLLAMA_HOST",            "http://ollama:11434")
 BACKEND_URL           = os.getenv("BACKEND_URL",            "http://backend:8000")
+IA_JUDGE_URL          = os.getenv("IA_JUDGE_URL",           "http://localhost:8002")
 DEFAULT_MODEL         = os.getenv("OLLAMA_MODEL_PRIMARY",   "phi3:mini")
 DEFAULT_FALLBACK_MODEL = os.getenv("OLLAMA_MODEL_FALLBACK", "llama3.2:1b")
 
@@ -76,6 +78,13 @@ with st.sidebar:
         )
 
     st.caption(f"Host Ollama: `{OLLAMA_HOST}`")
+    judge_ok, judge_message = get_ai_judge_status()
+    st.caption(f"AI Judge: `{IA_JUDGE_URL}`")
+    if judge_ok:
+        st.success("AI Judge online")
+    else:
+        st.warning("AI Judge offline")
+        st.caption(judge_message)
     st.divider()
     st.markdown(
         "**Fluxo de uso:**\n"
@@ -97,6 +106,7 @@ for key, default in {
     "tfidf_data":        None,
     "term_weights":      [],
     "suggested_string":  "",
+    "judge_result":      None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -142,6 +152,7 @@ if optimize_btn:
             st.session_state.sim_results  = []
             st.session_state.selected_ids = []
             st.session_state.iteration    = 1
+            st.session_state.judge_result = None
             status.update(label="String otimizada com sucesso!", state="complete", expanded=False)
         except Exception as e:
             status.update(label="Erro na otimização", state="error", expanded=True)
@@ -207,9 +218,37 @@ if st.session_state.opt_result:
         key=f"active_string_input_{st.session_state.iteration}",
     )
 
-    simulate_btn = st.button(
-        "📄 Simular resultados Scopus", type="secondary", use_container_width=True
-    )
+    judge_col, simulate_col = st.columns(2)
+    with judge_col:
+        judge_btn = st.button(
+            "⚖️ Julgar string com AI Judge",
+            type="secondary",
+            use_container_width=True,
+            disabled=not judge_ok,
+        )
+    with simulate_col:
+        simulate_btn = st.button(
+            "📄 Simular resultados Scopus", type="secondary", use_container_width=True
+        )
+
+    if judge_btn:
+        with st.status("Enviando string para julgamento...", expanded=True) as status:
+            try:
+                st.write("Avaliando cobertura conceitual, sinônimos e operadores booleanos...")
+                st.session_state.judge_result = judge_search_string(
+                    topic=st.session_state.original_query or query,
+                    search_string=st.session_state.active_string,
+                    database="Scopus",
+                )
+                status.update(
+                    label="Julgamento concluído com sucesso!",
+                    state="complete",
+                    expanded=False,
+                )
+            except Exception as e:
+                st.session_state.judge_result = None
+                status.update(label="Erro no julgamento", state="error", expanded=True)
+                st.error(str(e))
 
     if simulate_btn:
         with st.status("Simulando resultados Scopus...", expanded=True) as status:
@@ -240,6 +279,42 @@ if st.session_state.opt_result:
                 st.error(f"Erro ao simular resultados: {e}")
                 st.stop()
         st.rerun()
+
+    if st.session_state.judge_result:
+        judge = st.session_state.judge_result
+        st.markdown("---")
+        st.subheader("Parecer do AI as Judge")
+        st.success(
+            f"Decisão: {judge.get('decision', '—')} · Score final: {judge.get('final_score', '—')}/5"
+        )
+
+        criteria = judge.get("criteria", {})
+        if criteria:
+            crit_cols = st.columns(2)
+            for index, (name, values) in enumerate(criteria.items()):
+                score = values.get("score", "—")
+                justification = values.get("justification", "")
+                with crit_cols[index % 2]:
+                    with st.container(border=True):
+                        st.markdown(f"**{name}**")
+                        st.metric("Score", score)
+                        st.caption(justification or "Sem justificativa informada.")
+
+        problems = judge.get("identified_problems", [])
+        suggestions = judge.get("improvement_suggestions", [])
+
+        if problems:
+            st.markdown("**Problemas identificados**")
+            for problem in problems:
+                st.warning(problem)
+
+        if suggestions:
+            st.markdown("**Sugestões de melhoria**")
+            for suggestion in suggestions:
+                st.info(suggestion)
+
+        with st.expander("Ver JSON bruto do julgamento"):
+            st.json(judge)
 
 # ── Step 3 — Simulated results ────────────────────────────────────────────────
 if st.session_state.sim_results:
