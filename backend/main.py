@@ -86,9 +86,13 @@ def _seed_default_agents() -> None:
         description="Avalia a relevância de um artigo científico para um protocolo de pesquisa.",
         seed_version_name=ARTICLE_EVALUATOR_VERSION,
         version_description=(
-            "Suporte a Protocolo de Pesquisa completo: critérios de exclusão "
-            "eliminatórios, critérios de inclusão com lógica configurável "
-            "(ANY/ALL/expressão), e objetivos gerais e específicos da pesquisa."
+            "Avaliação em duas etapas: triagem inicial por título (pente grosso, "
+            "só rejeita com certeza) seguida de avaliação completa por título + "
+            "abstract + palavras-chave (pente fino). Suporte a Protocolo de "
+            "Pesquisa completo: critérios de exclusão eliminatórios, critérios de "
+            "inclusão com lógica configurável (ANY/ALL/expressão), e objetivos "
+            "gerais e específicos da pesquisa. Este system prompt rege apenas a "
+            "etapa 2 (pente fino); a etapa 1 usa um prompt fixo definido no código."
         ),
         system_prompt=ARTICLE_EVALUATOR_PROMPT,
         temperature=0.1,
