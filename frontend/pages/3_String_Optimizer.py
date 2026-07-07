@@ -6,7 +6,7 @@ import ollama
 import streamlit as st
 
 from ai_judge_client import get_ai_judge_status, judge_search_string
-from scopus_agent import optimize_query, simulate_results, refine_query
+from scopus_agent import improve_query_with_judge_feedback, optimize_query, simulate_results, refine_query
 from text_analysis import compute_tfidf, compute_term_weights
 
 st.set_page_config(
@@ -107,6 +107,7 @@ for key, default in {
     "term_weights":      [],
     "suggested_string":  "",
     "judge_result":      None,
+    "judge_improved_result": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -153,6 +154,7 @@ if optimize_btn:
             st.session_state.selected_ids = []
             st.session_state.iteration    = 1
             st.session_state.judge_result = None
+            st.session_state.judge_improved_result = None
             status.update(label="String otimizada com sucesso!", state="complete", expanded=False)
         except Exception as e:
             status.update(label="Erro na otimização", state="error", expanded=True)
@@ -240,6 +242,19 @@ if st.session_state.opt_result:
                     search_string=st.session_state.active_string,
                     database="Scopus",
                 )
+                st.session_state.judge_improved_result = None
+                if st.session_state.judge_result.get("decision") == "REVISE":
+                    st.write("O juiz sugeriu revisão; gerando automaticamente uma string_v2...")
+                    st.session_state.judge_improved_result = improve_query_with_judge_feedback(
+                        get_llm(),
+                        agent_models,
+                        st.session_state.original_query or query,
+                        st.session_state.active_string,
+                        st.session_state.judge_result,
+                        system_prompt=system_prompt,
+                        temperature=agent_temperature,
+                        on_step=st.write,
+                    )
                 status.update(
                     label="Julgamento concluído com sucesso!",
                     state="complete",
@@ -247,6 +262,7 @@ if st.session_state.opt_result:
                 )
             except Exception as e:
                 st.session_state.judge_result = None
+                st.session_state.judge_improved_result = None
                 status.update(label="Erro no julgamento", state="error", expanded=True)
                 st.error(str(e))
 
@@ -315,6 +331,49 @@ if st.session_state.opt_result:
 
         with st.expander("Ver JSON bruto do julgamento"):
             st.json(judge)
+
+        improved = st.session_state.judge_improved_result
+        if judge.get("decision") == "REVISE" and improved:
+            st.markdown("---")
+            st.subheader("String_v2 gerada com feedback do juiz")
+            st.info(f"**Estratégia revisada:** {improved.get('strategy_explanation', '—')}")
+
+            improved_rec_name = improved.get("recommended_string") or "expanded"
+            improved_rec_string = (
+                improved.get(f"string_{improved_rec_name}")
+                or improved.get("string_expanded")
+                or improved.get("string_core")
+                or ""
+            )
+
+            v2_core, v2_expanded, v2_full = st.tabs(["Core v2", "Expanded v2", "Full v2"])
+            with v2_core:
+                st.code(improved.get("string_core", ""), language="text")
+            with v2_expanded:
+                st.code(improved.get("string_expanded", ""), language="text")
+            with v2_full:
+                st.code(improved.get("string_full", ""), language="text")
+
+            with st.container(border=True):
+                st.markdown(
+                    f"**String_v2 recomendada** (`{improved_rec_name}`) — "
+                    f"{improved.get('recommended_reason', '')}"
+                )
+                st.code(improved_rec_string, language="text")
+
+            use_v2_btn = st.button(
+                "Usar string_v2 como ativa",
+                type="primary",
+                use_container_width=True,
+            )
+            if use_v2_btn:
+                st.session_state.opt_result = improved
+                st.session_state.active_string = improved_rec_string
+                st.session_state.sim_results = []
+                st.session_state.selected_ids = []
+                st.session_state.term_weights = []
+                st.session_state.suggested_string = ""
+                st.rerun()
 
 # ── Step 3 — Simulated results ────────────────────────────────────────────────
 if st.session_state.sim_results:

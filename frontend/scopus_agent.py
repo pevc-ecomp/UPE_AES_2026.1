@@ -405,3 +405,57 @@ def refine_query(
     result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
     step("Normalizando nova string otimizada...")
     return _normalise(result)
+
+
+def improve_query_with_judge_feedback(
+    llm_client,
+    models,
+    original_query: str,
+    current_string: str,
+    judge_result: dict,
+    system_prompt: str | None = None,
+    temperature: float = 0.2,
+    on_step=None,
+) -> dict:
+    """Generate a revised Scopus string using structured AI judge feedback."""
+
+    def step(msg):
+        if on_step:
+            on_step(msg)
+
+    criteria_text = json.dumps(judge_result.get("criteria", {}), ensure_ascii=False, indent=2)
+    problems_text = json.dumps(judge_result.get("identified_problems", []), ensure_ascii=False, indent=2)
+    suggestions_text = json.dumps(
+        judge_result.get("improvement_suggestions", []),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Original research question: {original_query}\n"
+                f"Current Scopus string: {current_string}\n"
+                f"Judge decision: {judge_result.get('decision', '')}\n"
+                f"Judge final score: {judge_result.get('final_score', '')}\n\n"
+                "The following AI judge feedback must be incorporated into a revised string.\n"
+                "Preserve any strong parts of the current string, but fix the weak parts.\n"
+                "Return ONLY valid JSON in the same optimization structure.\n\n"
+                f"Criteria scores and justifications:\n{criteria_text}\n\n"
+                f"Identified problems:\n{problems_text}\n\n"
+                f"Improvement suggestions:\n{suggestions_text}\n\n"
+                "Additional rules:\n"
+                "- Explicitly address the judge criticisms in the new strategy_explanation.\n"
+                "- Improve weak criteria such as synonym quality, conceptual coverage, recall, or precision.\n"
+                "- Keep the result compatible with Scopus syntax.\n"
+                "- recommended_string should point to the best revised version."
+            ),
+        },
+    ]
+    step("Interpretando feedback estruturado do AI Judge...")
+    step("Gerando uma string_v2 com base nos problemas e sugestões...")
+    result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
+    step("Normalizando proposta revisada pelo agente...")
+    return _normalise(result)
