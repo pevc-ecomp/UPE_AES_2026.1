@@ -52,6 +52,8 @@ if "manual_judge_result" not in st.session_state:
     st.session_state.manual_judge_result = None
 if "manual_revision_result" not in st.session_state:
     st.session_state.manual_revision_result = None
+if "csv_judge_summary" not in st.session_state:
+    st.session_state.csv_judge_summary = None
 
 for _key, _default in [
     ("ev_title", ""),
@@ -226,6 +228,102 @@ def _revision_to_evaluation_result(revision_article: dict) -> dict:
         "inclusion_criteria_met": revision_article.get("revised_inclusion_criteria_met", []),
         "source": "classification_v2",
     }
+
+
+def _build_csv_judge_article(result_row: dict, judge_article: dict | None = None) -> dict:
+    article_payload = {
+        "title": result_row.get("_article_title") or result_row.get("article_name", ""),
+        "abstract": result_row.get("_article_abstract", ""),
+        "keywords": result_row.get("_article_keywords", []),
+        "model_classification": result_row.get("verdict", "UNSURE"),
+        "model_score": result_row.get("score", 0),
+        "model_justification": result_row.get("reason", ""),
+        "excluded_by_criterion": result_row.get("excluded_by_criterion", False),
+        "exclusion_triggered": result_row.get("_exclusion_triggered_raw")
+        or result_row.get("exclusion_triggered")
+        or [],
+        "inclusion_criteria_met": result_row.get("_inclusion_criteria_met_raw")
+        or result_row.get("inclusion_criteria_met")
+        or [],
+    }
+    if judge_article:
+        article_payload["judge_verdict"] = judge_article.get("judge_verdict")
+        article_payload["judge_justification"] = judge_article.get("judge_justification")
+        article_payload["human_review_recommended"] = judge_article.get("human_review_recommended")
+    return article_payload
+
+
+def _build_protocol_judge_request(protocol_context: dict, articles: list[dict]) -> dict:
+    return {
+        "review_objective": protocol_context.get("description", ""),
+        "protocol_description": protocol_context.get("description", ""),
+        "general_objectives": protocol_context.get("general_objectives", ""),
+        "specific_objectives": protocol_context.get("specific_objectives", ""),
+        "inclusion_criteria": _criteria_to_multiline(protocol_context.get("inclusion_criteria", [])),
+        "exclusion_criteria": _criteria_to_multiline(protocol_context.get("exclusion_criteria", [])),
+        "inclusion_logic": protocol_context.get("inclusion_logic", "ANY"),
+        "articles": articles,
+    }
+
+
+def _apply_csv_judge_and_revision(results: list[dict], protocol_context: dict) -> tuple[list[dict], dict]:
+    enriched_results = []
+    judge_stats = {
+        "correct": 0,
+        "uncertain": 0,
+        "incorrect": 0,
+        "revised": 0,
+    }
+
+    for row in results:
+        article_payload = _build_csv_judge_article(row)
+        judge_request = _build_protocol_judge_request(protocol_context, [article_payload])
+        judge_result = judge_article_classifications(**judge_request)
+        judge_article = (judge_result.get("articles") or [{}])[0]
+
+        enriched_row = dict(row)
+        enriched_row["judge_overall_result"] = judge_result.get("overall_result", "")
+        enriched_row["judge_verdict"] = judge_article.get("judge_verdict", "")
+        enriched_row["judge_confidence_score"] = judge_article.get("confidence_score", "")
+        enriched_row["judge_justification"] = judge_article.get("judge_justification", "")
+        enriched_row["judge_human_review_recommended"] = judge_article.get(
+            "human_review_recommended",
+            True,
+        )
+
+        verdict = judge_article.get("judge_verdict")
+        if verdict == "CORRECT":
+            judge_stats["correct"] += 1
+        elif verdict == "INCORRECT":
+            judge_stats["incorrect"] += 1
+        else:
+            judge_stats["uncertain"] += 1
+
+        if verdict != "CORRECT":
+            revision_payload = _build_csv_judge_article(row, judge_article=judge_article)
+            revision_request = _build_protocol_judge_request(protocol_context, [revision_payload])
+            revision_result = revise_article_classifications(**revision_request)
+            revision_article = (revision_result.get("articles") or [{}])[0]
+
+            enriched_row["v2_verdict"] = revision_article.get("revised_classification", "")
+            enriched_row["v2_score"] = revision_article.get("revised_score", "")
+            enriched_row["v2_reason"] = revision_article.get("revised_justification", "")
+            enriched_row["v2_changes_summary"] = revision_article.get("changes_summary", "")
+            enriched_row["v2_human_review_recommended"] = revision_article.get(
+                "human_review_recommended",
+                True,
+            )
+            judge_stats["revised"] += 1
+        else:
+            enriched_row["v2_verdict"] = ""
+            enriched_row["v2_score"] = ""
+            enriched_row["v2_reason"] = ""
+            enriched_row["v2_changes_summary"] = ""
+            enriched_row["v2_human_review_recommended"] = ""
+
+        enriched_results.append(enriched_row)
+
+    return enriched_results, judge_stats
 
 
 # ── Dialogs ───────────────────────────────────────────────────────────────────
@@ -409,6 +507,7 @@ with st.sidebar:
     if st.session_state.csv_results:
         if st.button("🗑️ Limpar resultados do CSV", use_container_width=True):
             st.session_state.csv_results = []
+            st.session_state.csv_judge_summary = None
             st.rerun()
 
 
@@ -610,11 +709,23 @@ if input_mode.startswith("📂"):
                 }
                 result = _call_evaluate(payload)
                 if result:
+                    raw_exclusion_triggered = result.get("exclusion_triggered", [])
+                    raw_inclusion_met = result.get("inclusion_criteria_met", [])
                     if isinstance(result.get("exclusion_triggered"), list):
                         result["exclusion_triggered"] = "; ".join(result["exclusion_triggered"])
                     if isinstance(result.get("inclusion_criteria_met"), list):
                         result["inclusion_criteria_met"] = "; ".join(result["inclusion_criteria_met"])
-                    results.append({**row.to_dict(), **result})
+                    results.append(
+                        {
+                            **row.to_dict(),
+                            **result,
+                            "_article_title": title[:1000],
+                            "_article_abstract": abstract[:10000],
+                            "_article_keywords": keywords,
+                            "_exclusion_triggered_raw": raw_exclusion_triggered,
+                            "_inclusion_criteria_met_raw": raw_inclusion_met,
+                        }
+                    )
                 else:
                     skipped += 1
 
@@ -625,6 +736,7 @@ if input_mode.startswith("📂"):
                 st.warning(f"{skipped} linha(s) ignorada(s) (dados incompletos ou erro de avaliação).")
 
             st.session_state.csv_results = results
+            st.session_state.csv_judge_summary = None
             st.rerun()
 
 # ── Modo manual (testes) ───────────────────────────────────────────────────────
@@ -700,6 +812,7 @@ st.divider()
 # ── Resultados do CSV (lote) ───────────────────────────────────────────────────
 if st.session_state.csv_results:
     results = st.session_state.csv_results
+    protocol_context = _build_protocol_payload()
 
     st.subheader("📊 Resultados da Avaliação em Lote")
 
@@ -714,16 +827,80 @@ if st.session_state.csv_results:
     c3.metric("❌ NOT-RELATED", n_not_related)
     c4.metric("⛔ Excluídos por critério", n_excluded)
 
+    csv_judge_col, _ = st.columns([1, 2])
+    with csv_judge_col:
+        judge_csv_btn = st.button(
+            "⚖️ Julgar resultados do CSV com AI Judge",
+            type="secondary",
+            use_container_width=True,
+            disabled=(not judge_ok),
+        )
+
+    if judge_csv_btn:
+        with st.status("Julgando resultados em lote...", expanded=True) as status:
+            try:
+                st.write("Revisando coerência das classificações produzidas pelo avaliador...")
+                enriched_results, judge_stats = _apply_csv_judge_and_revision(results, protocol_context)
+                st.session_state.csv_results = enriched_results
+                st.session_state.csv_judge_summary = judge_stats
+                status.update(
+                    label="Julgamento em lote concluído com sucesso!",
+                    state="complete",
+                    expanded=False,
+                )
+                st.rerun()
+            except Exception as exc:
+                status.update(label="Erro no julgamento em lote", state="error", expanded=True)
+                st.error(str(exc))
+
+    if st.session_state.csv_judge_summary:
+        judge_stats = st.session_state.csv_judge_summary
+        st.markdown("**Resumo do AI Judge**")
+        j1, j2, j3, j4 = st.columns(4)
+        j1.metric("CORRECT", judge_stats.get("correct", 0))
+        j2.metric("UNCERTAIN", judge_stats.get("uncertain", 0))
+        j3.metric("INCORRECT", judge_stats.get("incorrect", 0))
+        j4.metric("Classification_v2", judge_stats.get("revised", 0))
+
     results_df = pd.DataFrame(results)
-    preferred_cols = [
+    visible_cols = [c for c in results_df.columns if not c.startswith("_")]
+
+    base_cols = [
         "article_name", "score", "verdict", "excluded_by_criterion",
         "exclusion_triggered", "inclusion_criteria_met", "reason",
     ]
-    show_cols = [c for c in preferred_cols if c in results_df.columns]
-    show_cols += [c for c in results_df.columns if c not in show_cols]
-    st.dataframe(results_df[show_cols], use_container_width=True)
+    base_show_cols = [c for c in base_cols if c in visible_cols]
+    base_show_cols += [
+        c for c in visible_cols
+        if c not in base_show_cols
+        and not c.startswith("judge_")
+        and not c.startswith("v2_")
+    ]
 
-    csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+    st.markdown("**Tabela da primeira avaliação**")
+    st.dataframe(results_df[base_show_cols], use_container_width=True)
+
+    if st.session_state.csv_judge_summary:
+        judge_cols = [
+            "article_name",
+            "verdict",
+            "score",
+            "judge_overall_result",
+            "judge_verdict",
+            "judge_confidence_score",
+            "judge_human_review_recommended",
+            "judge_justification",
+            "v2_verdict",
+            "v2_score",
+            "v2_human_review_recommended",
+            "v2_changes_summary",
+            "v2_reason",
+        ]
+        judge_show_cols = [c for c in judge_cols if c in visible_cols]
+        st.markdown("**Tabela do AI Judge e classification_v2**")
+        st.dataframe(results_df[judge_show_cols], use_container_width=True)
+
+    csv_bytes = results_df[visible_cols].to_csv(index=False).encode("utf-8")
     st.download_button(
         "⬇️ Baixar resultados (CSV)",
         data=csv_bytes,
