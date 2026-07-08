@@ -9,7 +9,6 @@ import streamlit as st
 from ai_judge_client import (
     get_ai_judge_status,
     judge_article_classifications,
-    revise_article_classifications,
 )
 
 st.set_page_config(
@@ -181,6 +180,24 @@ def _call_evaluate(payload: dict) -> dict | None:
         return None
 
 
+def _call_evaluate_revision(payload: dict) -> dict | None:
+    try:
+        resp = httpx.post(
+            f"{BACKEND_URL}/agents/evaluate-article/revise",
+            json=payload,
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.json().get("detail", str(exc))
+        st.error(f"Erro do backend: {detail}")
+        return None
+    except Exception as exc:
+        st.error(f"Erro de conexão: {exc}")
+        return None
+
+
 def _criteria_to_multiline(criteria: list[str]) -> str:
     return "\n".join(item.strip() for item in criteria if item.strip())
 
@@ -217,16 +234,49 @@ def _build_manual_judge_request(protocol_context: dict, article_payload: dict) -
     }
 
 
-def _revision_to_evaluation_result(revision_article: dict) -> dict:
+def _build_evaluation_revision_payload(
+    article_context: dict,
+    protocol_context: dict,
+    original_evaluation: dict,
+    judge_article: dict,
+    agent_id: str | None,
+) -> dict:
     return {
-        "score": revision_article.get("revised_score", 0),
-        "verdict": revision_article.get("revised_classification", "UNSURE"),
-        "reason": revision_article.get("revised_justification", ""),
-        "article_name": revision_article.get("title", ""),
-        "excluded_by_criterion": revision_article.get("revised_excluded_by_criterion", False),
-        "exclusion_triggered": revision_article.get("revised_exclusion_triggered", []),
-        "inclusion_criteria_met": revision_article.get("revised_inclusion_criteria_met", []),
-        "source": "classification_v2",
+        "title": article_context["title"],
+        "abstract": article_context["abstract"],
+        "keywords": article_context["keywords"],
+        "research_protocol": protocol_context,
+        "original_evaluation": {
+            "score": original_evaluation.get("score", 0),
+            "verdict": original_evaluation.get("verdict", "UNSURE"),
+            "reason": original_evaluation.get("reason", ""),
+            "article_name": original_evaluation.get("article_name", article_context["title"]),
+            "excluded_by_criterion": original_evaluation.get("excluded_by_criterion", False),
+            "exclusion_triggered": original_evaluation.get("exclusion_triggered", []),
+            "inclusion_criteria_met": original_evaluation.get("inclusion_criteria_met", []),
+        },
+        "judge_feedback": {
+            "judge_verdict": judge_article.get("judge_verdict", "UNCERTAIN"),
+            "confidence_score": judge_article.get("confidence_score", 0),
+            "judge_justification": judge_article.get("judge_justification", ""),
+            "human_review_recommended": judge_article.get("human_review_recommended", True),
+        },
+        "agent_id": agent_id,
+    }
+
+
+def _evaluation_result_to_revision_view(result: dict, original_verdict: str) -> dict:
+    return {
+        "title": result.get("article_name", ""),
+        "original_classification": original_verdict,
+        "revised_classification": result.get("verdict", "UNSURE"),
+        "revised_score": result.get("score", 0),
+        "revised_justification": result.get("reason", ""),
+        "revised_excluded_by_criterion": result.get("excluded_by_criterion", False),
+        "revised_exclusion_triggered": result.get("exclusion_triggered", []),
+        "revised_inclusion_criteria_met": result.get("inclusion_criteria_met", []),
+        "changes_summary": "Classification_v2 gerada pelo próprio Article Evaluator com base no feedback do AI Judge.",
+        "human_review_recommended": True,
     }
 
 
@@ -266,7 +316,11 @@ def _build_protocol_judge_request(protocol_context: dict, articles: list[dict]) 
     }
 
 
-def _apply_csv_judge_and_revision(results: list[dict], protocol_context: dict) -> tuple[list[dict], dict]:
+def _apply_csv_judge_and_revision(
+    results: list[dict],
+    protocol_context: dict,
+    agent_id: str | None,
+) -> tuple[list[dict], dict]:
     enriched_results = []
     judge_stats = {
         "correct": 0,
@@ -300,20 +354,41 @@ def _apply_csv_judge_and_revision(results: list[dict], protocol_context: dict) -
             judge_stats["uncertain"] += 1
 
         if verdict != "CORRECT":
-            revision_payload = _build_csv_judge_article(row, judge_article=judge_article)
-            revision_request = _build_protocol_judge_request(protocol_context, [revision_payload])
-            revision_result = revise_article_classifications(**revision_request)
-            revision_article = (revision_result.get("articles") or [{}])[0]
-
-            enriched_row["v2_verdict"] = revision_article.get("revised_classification", "")
-            enriched_row["v2_score"] = revision_article.get("revised_score", "")
-            enriched_row["v2_reason"] = revision_article.get("revised_justification", "")
-            enriched_row["v2_changes_summary"] = revision_article.get("changes_summary", "")
-            enriched_row["v2_human_review_recommended"] = revision_article.get(
-                "human_review_recommended",
-                True,
+            revision_payload = _build_evaluation_revision_payload(
+                {
+                    "title": row.get("_article_title") or row.get("article_name", ""),
+                    "abstract": row.get("_article_abstract", ""),
+                    "keywords": row.get("_article_keywords", []),
+                },
+                protocol_context,
+                {
+                    "score": row.get("score", 0),
+                    "verdict": row.get("verdict", "UNSURE"),
+                    "reason": row.get("reason", ""),
+                    "article_name": row.get("article_name", ""),
+                    "excluded_by_criterion": row.get("excluded_by_criterion", False),
+                    "exclusion_triggered": row.get("_exclusion_triggered_raw") or row.get("exclusion_triggered") or [],
+                    "inclusion_criteria_met": row.get("_inclusion_criteria_met_raw") or row.get("inclusion_criteria_met") or [],
+                },
+                judge_article,
+                agent_id,
             )
-            judge_stats["revised"] += 1
+            revision_result = _call_evaluate_revision(revision_payload)
+            if revision_result:
+                enriched_row["v2_verdict"] = revision_result.get("verdict", "")
+                enriched_row["v2_score"] = revision_result.get("score", "")
+                enriched_row["v2_reason"] = revision_result.get("reason", "")
+                enriched_row["v2_changes_summary"] = (
+                    "Classification_v2 gerada pelo Article Evaluator com feedback do AI Judge."
+                )
+                enriched_row["v2_human_review_recommended"] = True
+                judge_stats["revised"] += 1
+            else:
+                enriched_row["v2_verdict"] = ""
+                enriched_row["v2_score"] = ""
+                enriched_row["v2_reason"] = ""
+                enriched_row["v2_changes_summary"] = ""
+                enriched_row["v2_human_review_recommended"] = ""
         else:
             enriched_row["v2_verdict"] = ""
             enriched_row["v2_score"] = ""
@@ -840,7 +915,11 @@ if st.session_state.csv_results:
         with st.status("Julgando resultados em lote...", expanded=True) as status:
             try:
                 st.write("Revisando coerência das classificações produzidas pelo avaliador...")
-                enriched_results, judge_stats = _apply_csv_judge_and_revision(results, protocol_context)
+                enriched_results, judge_stats = _apply_csv_judge_and_revision(
+                    results,
+                    protocol_context,
+                    selected_agent_id,
+                )
                 st.session_state.csv_results = enriched_results
                 st.session_state.csv_judge_summary = judge_stats
                 status.update(
@@ -981,18 +1060,24 @@ if st.session_state.evaluation_history:
                 judge_article = (judge_result.get("articles") or [{}])[0]
                 if judge_article.get("judge_verdict") != "CORRECT":
                     st.write("O juiz encontrou inconsistências; gerando classification_v2...")
-                    revision_payload = _build_manual_judge_article(
+                    revision_payload = _build_evaluation_revision_payload(
                         article_context,
-                        latest,
-                        judge_article=judge_article,
-                    )
-                    revision_request = _build_manual_judge_request(
                         protocol_context,
-                        revision_payload,
+                        latest,
+                        judge_article,
+                        selected_agent_id,
                     )
-                    st.session_state.manual_revision_result = revise_article_classifications(
-                        **revision_request
-                    )
+                    revision_result = _call_evaluate_revision(revision_payload)
+                    if revision_result:
+                        st.session_state.manual_revision_result = {
+                            "summary": "Classification_v2 gerada pelo próprio Article Evaluator com base no feedback do AI Judge.",
+                            "articles": [
+                                _evaluation_result_to_revision_view(
+                                    revision_result,
+                                    latest.get("verdict", "UNSURE"),
+                                )
+                            ],
+                        }
 
                 status.update(
                     label="Julgamento concluído com sucesso!",

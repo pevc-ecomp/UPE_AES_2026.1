@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from agents.article_evaluator import evaluate_article as _evaluate
+from agents.article_evaluator import revise_article_evaluation as _revise_evaluation
 from db import get_session
 from models.agent import Agent, AgentVersion
 from schemas.agent import (
@@ -14,7 +15,7 @@ from schemas.agent import (
     AgentVersionCreate,
     AgentVersionRead,
 )
-from schemas.evaluation import EvaluationRequest, EvaluationResponse
+from schemas.evaluation import EvaluationRequest, EvaluationResponse, EvaluationRevisionRequest
 
 router = APIRouter()
 
@@ -56,6 +57,35 @@ def _get_agent_or_404(agent_id: str, session: Session) -> Agent:
     return agent
 
 
+def _resolve_article_evaluator_agent(
+    agent_id: Optional[str],
+    session: Session,
+) -> tuple[Agent, AgentVersion]:
+    if agent_id:
+        agent = session.get(Agent, agent_id)
+        if not agent:
+            raise HTTPException(404, f"Agent '{agent_id}' not found")
+    else:
+        agent = session.exec(
+            select(Agent).where(Agent.agent_type == "article-evaluator")
+        ).first()
+        if not agent:
+            agent = session.exec(select(Agent).where(Agent.name == "article-evaluator")).first()
+        if not agent:
+            agent = session.exec(select(Agent).limit(1)).first()
+        if not agent:
+            raise HTTPException(503, "No agents configured. Create an agent first.")
+
+    if not agent.active_version_id:
+        raise HTTPException(422, f"Agent '{agent.name}' has no active version")
+
+    agent_version = session.get(AgentVersion, agent.active_version_id)
+    if not agent_version:
+        raise HTTPException(500, "Active version record not found")
+
+    return agent, agent_version
+
+
 # ── Agent CRUD ────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[AgentRead])
@@ -93,30 +123,23 @@ async def evaluate_article_endpoint(
     request: EvaluationRequest,
     session: Session = Depends(get_session),
 ):
-    if request.agent_id:
-        agent = session.get(Agent, request.agent_id)
-        if not agent:
-            raise HTTPException(404, f"Agent '{request.agent_id}' not found")
-    else:
-        agent = session.exec(
-            select(Agent).where(Agent.agent_type == "article-evaluator")
-        ).first()
-        if not agent:
-            agent = session.exec(select(Agent).where(Agent.name == "article-evaluator")).first()
-        if not agent:
-            agent = session.exec(select(Agent).limit(1)).first()
-        if not agent:
-            raise HTTPException(503, "No agents configured. Create an agent first.")
-
-    if not agent.active_version_id:
-        raise HTTPException(422, f"Agent '{agent.name}' has no active version")
-
-    agent_version = session.get(AgentVersion, agent.active_version_id)
-    if not agent_version:
-        raise HTTPException(500, "Active version record not found")
+    _, agent_version = _resolve_article_evaluator_agent(request.agent_id, session)
 
     try:
         return await _evaluate(request, agent_version)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+
+@router.post("/evaluate-article/revise", response_model=EvaluationResponse)
+async def revise_article_evaluation_endpoint(
+    request: EvaluationRevisionRequest,
+    session: Session = Depends(get_session),
+):
+    _, agent_version = _resolve_article_evaluator_agent(request.agent_id, session)
+
+    try:
+        return await _revise_evaluation(request, agent_version)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
 

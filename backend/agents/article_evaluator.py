@@ -6,7 +6,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
 from core.config import get_settings
-from schemas.evaluation import EvaluationRequest, EvaluationResponse, Verdict
+from schemas.evaluation import (
+    EvaluationRequest,
+    EvaluationResponse,
+    EvaluationRevisionRequest,
+    Verdict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +137,101 @@ def _build_human_message(request: EvaluationRequest) -> str:
     return "\n".join(lines)
 
 
-async def evaluate_article(request: EvaluationRequest, agent_version) -> EvaluationResponse:
-    settings = get_settings()
-    human_content = _build_human_message(request)
+def _build_revision_human_message(request: EvaluationRevisionRequest) -> str:
+    p = request.research_protocol
+    original = request.original_evaluation
+    judge = request.judge_feedback
+    lines = ["## PROTOCOLO DE PESQUISA"]
 
+    lines.append("\n### Descrição da Pesquisa")
+    lines.append(p.description)
+
+    if p.general_objectives.strip():
+        lines.append("\n### Objetivos Gerais")
+        lines.append(p.general_objectives)
+
+    if p.specific_objectives.strip():
+        lines.append("\n### Objetivos Específicos")
+        lines.append(p.specific_objectives)
+
+    if p.exclusion_criteria:
+        lines.append(
+            "\n### Critérios de Exclusão"
+            " (ELIMINATÓRIOS — qualquer um satisfeito exclui o artigo imediatamente)"
+        )
+        for i, c in enumerate(p.exclusion_criteria, 1):
+            lines.append(f"{i}. {c}")
+
+    if p.inclusion_criteria:
+        lines.append("\n### Critérios de Inclusão")
+        for i, c in enumerate(p.inclusion_criteria, 1):
+            lines.append(f"{i}. {c}")
+        lines.append(f"\n**Lógica de inclusão:** {p.inclusion_logic}")
+
+    lines.append("\n---\n## ARTIGO A REVISAR")
+    lines.append(f"\n**Título:** {request.title}")
+    lines.append(f"**Palavras-chave:** {', '.join(request.keywords)}")
+    lines.append(f"\n**Abstract:**\n{request.abstract}")
+
+    lines.append("\n---\n## CLASSIFICAÇÃO ORIGINAL DO AVALIADOR")
+    lines.append(f"Score: {original.score}")
+    lines.append(f"Veredito: {original.verdict}")
+    lines.append(f"Justificativa: {original.reason}")
+    lines.append(f"Excluído por critério: {original.excluded_by_criterion}")
+    if original.exclusion_triggered:
+        lines.append("Critérios de exclusão acionados:")
+        for item in original.exclusion_triggered:
+            lines.append(f"- {item}")
+    if original.inclusion_criteria_met:
+        lines.append("Critérios de inclusão satisfeitos:")
+        for item in original.inclusion_criteria_met:
+            lines.append(f"- {item}")
+
+    lines.append("\n---\n## FEEDBACK DO AI JUDGE")
+    lines.append(f"Judge verdict: {judge.judge_verdict}")
+    lines.append(f"Confidence score: {judge.confidence_score}")
+    lines.append(f"Judge justification: {judge.judge_justification}")
+    lines.append(f"Human review recommended: {judge.human_review_recommended}")
+
+    lines.append(
+        "\n\nReavalie o artigo com base no protocolo e no feedback do juiz. "
+        "Responda SOMENTE com o JSON especificado no formato padrão de avaliação. "
+        "Mantenha a classificação original se ela estiver bem sustentada, mas corrija-a se o feedback do juiz indicar problema relevante."
+    )
+    return "\n".join(lines)
+
+
+def _normalize_response_data(data: dict, fallback_title: str) -> EvaluationResponse:
+    score = max(0, min(100, int(data.get("score", 0))))
+    excluded = bool(data.get("excluded_by_criterion", False))
+
+    exclusion_triggered = data.get("exclusion_triggered", [])
+    if not isinstance(exclusion_triggered, list):
+        exclusion_triggered = [str(exclusion_triggered)] if exclusion_triggered else []
+
+    inclusion_met = data.get("inclusion_criteria_met", [])
+    if not isinstance(inclusion_met, list):
+        inclusion_met = [str(inclusion_met)] if inclusion_met else []
+
+    if excluded or exclusion_triggered:
+        score = 0
+        excluded = True
+
+    verdict = _derive_verdict(score)
+
+    return EvaluationResponse(
+        score=score,
+        verdict=verdict,
+        reason=str(data.get("reason", "")),
+        article_name=str(data.get("article_name", fallback_title)),
+        excluded_by_criterion=excluded,
+        exclusion_triggered=exclusion_triggered,
+        inclusion_criteria_met=inclusion_met,
+    )
+
+
+async def _run_article_evaluation(agent_version, fallback_title: str, human_content: str) -> EvaluationResponse:
+    settings = get_settings()
     last_error: Exception | None = None
     for model in [agent_version.model_primary, agent_version.model_fallback]:
         try:
@@ -151,34 +247,7 @@ async def evaluate_article(request: EvaluationRequest, agent_version) -> Evaluat
             ]
             response = await llm.ainvoke(messages)
             data = _extract_json(response.content)
-
-            score = max(0, min(100, int(data.get("score", 0))))
-            excluded = bool(data.get("excluded_by_criterion", False))
-
-            exclusion_triggered = data.get("exclusion_triggered", [])
-            if not isinstance(exclusion_triggered, list):
-                exclusion_triggered = [str(exclusion_triggered)] if exclusion_triggered else []
-
-            inclusion_met = data.get("inclusion_criteria_met", [])
-            if not isinstance(inclusion_met, list):
-                inclusion_met = [str(inclusion_met)] if inclusion_met else []
-
-            # Enforce exclusion invariant regardless of LLM score
-            if excluded or exclusion_triggered:
-                score = 0
-                excluded = True
-
-            verdict = _derive_verdict(score)
-
-            return EvaluationResponse(
-                score=score,
-                verdict=verdict,
-                reason=str(data.get("reason", "")),
-                article_name=str(data.get("article_name", request.title)),
-                excluded_by_criterion=excluded,
-                exclusion_triggered=exclusion_triggered,
-                inclusion_criteria_met=inclusion_met,
-            )
+            return _normalize_response_data(data, fallback_title)
         except Exception as exc:
             logger.warning("Model %s failed: %s", model, exc)
             last_error = exc
@@ -186,3 +255,16 @@ async def evaluate_article(request: EvaluationRequest, agent_version) -> Evaluat
     raise RuntimeError(
         f"All LLM models failed to evaluate the article. Last error: {last_error}"
     )
+
+
+async def evaluate_article(request: EvaluationRequest, agent_version) -> EvaluationResponse:
+    human_content = _build_human_message(request)
+    return await _run_article_evaluation(agent_version, request.title, human_content)
+
+
+async def revise_article_evaluation(
+    request: EvaluationRevisionRequest,
+    agent_version,
+) -> EvaluationResponse:
+    human_content = _build_revision_human_message(request)
+    return await _run_article_evaluation(agent_version, request.title, human_content)
