@@ -11,14 +11,32 @@ class SearchStringJudgeRequest(BaseModel):
 class ArticleClassification(BaseModel):
     title: str
     abstract: Optional[str] = None
-    model_classification: str = Field(..., description="Classification made by another model, e.g., INCLUDE, EXCLUDE, MAYBE")
+    keywords: List[str] = Field(default_factory=list)
+    model_classification: str = Field(
+        ...,
+        description="Classification made by another model, e.g., INCLUDE, EXCLUDE, MAYBE, RELATED, UNSURE, NOT-RELATED",
+    )
+    model_score: Optional[float] = Field(
+        None,
+        description="Optional numeric score produced by the evaluated model",
+    )
     model_justification: Optional[str] = None
+    excluded_by_criterion: bool = False
+    exclusion_triggered: List[str] = Field(default_factory=list)
+    inclusion_criteria_met: List[str] = Field(default_factory=list)
+    judge_verdict: Optional[str] = None
+    judge_justification: Optional[str] = None
+    human_review_recommended: Optional[bool] = None
 
 
 class ArticleClassificationJudgeRequest(BaseModel):
     review_objective: str
     inclusion_criteria: Optional[str] = None
     exclusion_criteria: Optional[str] = None
+    protocol_description: Optional[str] = None
+    general_objectives: Optional[str] = None
+    specific_objectives: Optional[str] = None
+    inclusion_logic: Optional[str] = None
     articles: List[ArticleClassification]
 
 
@@ -60,3 +78,22 @@ class ArticleClassificationJudgeResponse(BaseModel):
     articles: List[ArticleJudgeResult]
     summary: str = ""
     main_risks: List[str] = Field(default_factory=list)
+
+
+class ArticleRevisionResult(BaseModel):
+    title: str
+    original_classification: str
+    revised_classification: Literal["RELATED", "UNSURE", "NOT-RELATED"]
+    revised_score: int = Field(..., ge=0, le=100)
+    revised_justification: str = ""
+    revised_excluded_by_criterion: bool = False
+    revised_exclusion_triggered: List[str] = Field(default_factory=list)
+    revised_inclusion_criteria_met: List[str] = Field(default_factory=list)
+    changes_summary: str = ""
+    human_review_recommended: bool = True
+
+
+class ArticleClassificationRevisionResponse(BaseModel):
+    type: Literal["ARTICLE_CLASSIFICATION_REVISION"] = "ARTICLE_CLASSIFICATION_REVISION"
+    articles: List[ArticleRevisionResult]
+    summary: str = ""

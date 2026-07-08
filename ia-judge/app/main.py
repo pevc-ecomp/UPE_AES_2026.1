@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.schemas import SearchStringJudgeRequest, ArticleClassificationJudgeRequest
-from app.judges import judge_search_string, judge_article_classification
+from app.judges import judge_search_string, judge_article_classification, revise_article_classification
 
 app = FastAPI(
     title="AI as Judge for Systematic Reviews",
@@ -27,4 +27,10 @@ def judge_string(data: SearchStringJudgeRequest):
 @app.post("/judge/articles")
 def judge_articles(data: ArticleClassificationJudgeRequest):
     result = judge_article_classification(data)
+    return result
+
+
+@app.post("/judge/articles/revise")
+def revise_articles(data: ArticleClassificationJudgeRequest):
+    result = revise_article_classification(data)
     return result

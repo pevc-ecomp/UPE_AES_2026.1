@@ -91,7 +91,7 @@ def _render_article_inputs() -> None:
             col_class, col_reason = st.columns([1, 2])
             with col_class:
                 current_class = article["model_classification"]
-                options = ["INCLUDE", "EXCLUDE", "MAYBE"]
+                options = ["RELATED", "UNSURE", "NOT-RELATED", "INCLUDE", "EXCLUDE", "MAYBE"]
                 current_index = options.index(current_class) if current_class in options else 0
                 st.selectbox(
                     "Classificação do modelo",

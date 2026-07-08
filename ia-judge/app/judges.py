@@ -5,6 +5,7 @@ from app.llm_client import ask_llm
 from app.schemas import (
     ArticleClassificationJudgeRequest,
     ArticleClassificationJudgeResponse,
+    ArticleClassificationRevisionResponse,
     SearchStringJudgeCriteria,
     SearchStringJudgeRequest,
     SearchStringJudgeResponse,
@@ -55,12 +56,40 @@ def _normalize_judge_verdict(value: str) -> str:
     return verdict_map.get(normalized, "UNCERTAIN")
 
 
+def _normalize_model_classification(value: str) -> str:
+    normalized = (value or "").strip().upper()
+    verdict_map = {
+        "RELATED": "RELATED",
+        "INCLUDE": "RELATED",
+        "APPROVE": "RELATED",
+        "CORRECT": "RELATED",
+        "UNSURE": "UNSURE",
+        "UNCERTAIN": "UNSURE",
+        "MAYBE": "UNSURE",
+        "REVISE": "UNSURE",
+        "NOT-RELATED": "NOT-RELATED",
+        "NOT RELATED": "NOT-RELATED",
+        "EXCLUDE": "NOT-RELATED",
+        "REJECT": "NOT-RELATED",
+        "INCORRECT": "NOT-RELATED",
+    }
+    return verdict_map.get(normalized, normalized or "UNSURE")
+
+
 def _normalize_confidence_score(value) -> float:
     try:
         score = float(value)
     except (TypeError, ValueError):
         return 0.0
     return max(0.0, min(5.0, score))
+
+
+def _normalize_article_score(value) -> int:
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, score))
 
 
 def _normalize_human_review_recommended(value, judge_verdict: str) -> bool:
@@ -87,7 +116,7 @@ def _normalize_article_judge_response(parsed_response: dict, request: ArticleCla
         normalized_articles.append(
             {
                 "title": str(raw_article.get("title") or source_article.title),
-                "model_classification": str(
+                "model_classification": _normalize_model_classification(
                     raw_article.get("model_classification") or source_article.model_classification
                 ),
                 "judge_verdict": judge_verdict,
@@ -110,6 +139,67 @@ def _normalize_article_judge_response(parsed_response: dict, request: ArticleCla
         main_risks = [str(main_risks)] if main_risks else []
     parsed_response["main_risks"] = [str(risk) for risk in main_risks if str(risk).strip()]
 
+    return parsed_response
+
+
+def _normalize_article_revision_response(parsed_response: dict, request: ArticleClassificationJudgeRequest) -> dict:
+    raw_articles = parsed_response.get("articles", [])
+    if not isinstance(raw_articles, list):
+        raw_articles = []
+
+    normalized_articles = []
+    for index, source_article in enumerate(request.articles):
+        raw_article = raw_articles[index] if index < len(raw_articles) and isinstance(raw_articles[index], dict) else {}
+        revised_classification = _normalize_model_classification(
+            raw_article.get("revised_classification") or source_article.model_classification
+        )
+        if revised_classification not in {"RELATED", "UNSURE", "NOT-RELATED"}:
+            revised_classification = _normalize_model_classification(source_article.model_classification)
+            if revised_classification not in {"RELATED", "UNSURE", "NOT-RELATED"}:
+                revised_classification = "UNSURE"
+
+        revised_excluded = bool(raw_article.get("revised_excluded_by_criterion", source_article.excluded_by_criterion))
+
+        exclusion_triggered = raw_article.get("revised_exclusion_triggered", source_article.exclusion_triggered)
+        if not isinstance(exclusion_triggered, list):
+            exclusion_triggered = [str(exclusion_triggered)] if exclusion_triggered else []
+
+        inclusion_met = raw_article.get(
+            "revised_inclusion_criteria_met",
+            source_article.inclusion_criteria_met,
+        )
+        if not isinstance(inclusion_met, list):
+            inclusion_met = [str(inclusion_met)] if inclusion_met else []
+
+        revised_score = _normalize_article_score(
+            raw_article.get("revised_score", source_article.model_score or 0)
+        )
+        if revised_excluded or exclusion_triggered:
+            revised_excluded = True
+            revised_score = 0
+            revised_classification = "NOT-RELATED"
+
+        normalized_articles.append(
+            {
+                "title": str(raw_article.get("title") or source_article.title),
+                "original_classification": _normalize_model_classification(source_article.model_classification),
+                "revised_classification": revised_classification,
+                "revised_score": revised_score,
+                "revised_justification": str(raw_article.get("revised_justification") or ""),
+                "revised_excluded_by_criterion": revised_excluded,
+                "revised_exclusion_triggered": [str(item) for item in exclusion_triggered if str(item).strip()],
+                "revised_inclusion_criteria_met": [str(item) for item in inclusion_met if str(item).strip()],
+                "changes_summary": str(raw_article.get("changes_summary") or ""),
+                "human_review_recommended": _normalize_human_review_recommended(
+                    raw_article.get("human_review_recommended"),
+                    "CORRECT" if revised_classification == _normalize_model_classification(source_article.model_classification) else "UNCERTAIN",
+                ),
+            }
+        )
+
+    parsed_response["type"] = "ARTICLE_CLASSIFICATION_REVISION"
+    parsed_response["articles"] = normalized_articles
+    parsed_response["summary"] = str(parsed_response.get("summary") or "")
     return parsed_response
 
 
@@ -402,6 +492,20 @@ def _article_risks(articles) -> list[str]:
     return risks
 
 
+def _article_revision_summary(articles) -> str:
+    changed = sum(
+        1
+        for article in articles
+        if article.original_classification != article.revised_classification
+    )
+    human_review = sum(1 for article in articles if article.human_review_recommended)
+    return (
+        f"Revision generated for {len(articles)} article(s). "
+        f"Changed classifications: {changed}. "
+        f"Human review recommended for {human_review}."
+    )
+
+
 def judge_search_string(data: SearchStringJudgeRequest) -> dict:
     normalized_search_string = _normalize_search_string_for_analysis(data.search_string)
     prompt = f"""
@@ -488,34 +592,60 @@ def judge_article_classification(data: ArticleClassificationJudgeRequest) -> dic
     articles_text = ""
 
     for index, article in enumerate(data.articles, start=1):
+        keywords = ", ".join(article.keywords) if article.keywords else ""
+        exclusion_triggered = "; ".join(article.exclusion_triggered) if article.exclusion_triggered else ""
+        inclusion_criteria_met = "; ".join(article.inclusion_criteria_met) if article.inclusion_criteria_met else ""
         articles_text += f"""
 Article {index}
 Title: {article.title}
 Abstract: {article.abstract}
+Keywords: {keywords}
 Classification made by the model: {article.model_classification}
+Score produced by the model: {article.model_score}
+Excluded by criterion: {article.excluded_by_criterion}
+Triggered exclusion criteria: {exclusion_triggered}
+Satisfied inclusion criteria: {inclusion_criteria_met}
 Justification given by the model: {article.model_justification}
+"""
+
+    protocol_context = f"""
+Review objective:
+{data.review_objective}
+
+Protocol description:
+{data.protocol_description}
+
+General objectives:
+{data.general_objectives}
+
+Specific objectives:
+{data.specific_objectives}
+
+Inclusion criteria:
+{data.inclusion_criteria}
+
+Inclusion logic:
+{data.inclusion_logic}
+
+Exclusion criteria:
+{data.exclusion_criteria}
 """
 
     prompt = f"""
 Judge whether the article classification decisions made by another model are adequate for a systematic literature review.
 
-Review objective:
-{data.review_objective}
-
-Inclusion criteria:
-{data.inclusion_criteria}
-
-Exclusion criteria:
-{data.exclusion_criteria}
+Review protocol and objectives:
+{protocol_context}
 
 Articles and model decisions:
 {articles_text}
 
 For each article, evaluate:
-1. Whether the classification is coherent with the review objective.
-2. Whether the justification is sufficient.
-3. Whether there is risk of classification error.
-4. Whether human review is recommended.
+1. Whether the classification is coherent with the review objective and protocol.
+2. Whether the score, exclusion decision, and inclusion evidence are coherent.
+3. Whether the justification is sufficient.
+4. Whether there is risk of classification error.
+5. Whether human review is recommended.
 
 Return only this JSON structure:
 
@@ -542,11 +672,18 @@ Rules:
 - Be conservative.
 - Recommend human review when there is uncertainty.
 - Keep justifications short and direct.
+- Preserve the model classification label style when possible, especially RELATED, UNSURE, and NOT-RELATED.
+- If the model says an article was excluded by criteria, verify whether that exclusion appears justified by the protocol.
 - overall_result should be APPROVE only when most classifications are correct with high confidence.
 - overall_result should be REVISE when there are uncertain cases.
 - overall_result should be REJECT when many classifications appear incorrect.
 """
-    parsed_response = _extract_json_object(ask_llm(prompt))
+
+    try:
+        parsed_response = _extract_json_object(ask_llm(prompt))
+    except Exception:
+        parsed_response = {}
+
     parsed_response = _normalize_article_judge_response(parsed_response, data)
     result = ArticleClassificationJudgeResponse.model_validate(parsed_response)
     result.overall_result = _overall_article_result(result.articles)
@@ -557,5 +694,110 @@ Rules:
     generated_risks = _article_risks(result.articles)
     if generated_risks:
         result.main_risks = list(dict.fromkeys([*result.main_risks, *generated_risks]))
+
+    return result.model_dump()
+
+
+def revise_article_classification(data: ArticleClassificationJudgeRequest) -> dict:
+    articles_text = ""
+
+    for index, article in enumerate(data.articles, start=1):
+        keywords = ", ".join(article.keywords) if article.keywords else ""
+        exclusion_triggered = "; ".join(article.exclusion_triggered) if article.exclusion_triggered else ""
+        inclusion_criteria_met = "; ".join(article.inclusion_criteria_met) if article.inclusion_criteria_met else ""
+        articles_text += f"""
+Article {index}
+Title: {article.title}
+Abstract: {article.abstract}
+Keywords: {keywords}
+Original model classification: {article.model_classification}
+Original model score: {article.model_score}
+Original model justification: {article.model_justification}
+Original exclusion flag: {article.excluded_by_criterion}
+Original triggered exclusion criteria: {exclusion_triggered}
+Original satisfied inclusion criteria: {inclusion_criteria_met}
+Judge verdict: {article.judge_verdict}
+Judge justification: {article.judge_justification}
+Judge recommends human review: {article.human_review_recommended}
+"""
+
+    protocol_context = f"""
+Review objective:
+{data.review_objective}
+
+Protocol description:
+{data.protocol_description}
+
+General objectives:
+{data.general_objectives}
+
+Specific objectives:
+{data.specific_objectives}
+
+Inclusion criteria:
+{data.inclusion_criteria}
+
+Inclusion logic:
+{data.inclusion_logic}
+
+Exclusion criteria:
+{data.exclusion_criteria}
+"""
+
+    prompt = f"""
+Revise the article classification decisions below using the AI judge feedback.
+
+Review protocol and objectives:
+{protocol_context}
+
+Articles, original model decisions, and judge feedback:
+{articles_text}
+
+For each article, produce a classification_v2 that:
+1. Preserves the original decision when it appears well supported.
+2. Changes the classification only when the judge feedback shows a strong problem.
+3. Recomputes a score from 0 to 100.
+4. Marks exclusion criteria only when clearly justified by the protocol.
+5. Recommends human review when uncertainty remains.
+
+Return only this JSON structure:
+
+{{
+  "type": "ARTICLE_CLASSIFICATION_REVISION",
+  "articles": [
+    {{
+      "title": "",
+      "original_classification": "",
+      "revised_classification": "RELATED | UNSURE | NOT-RELATED",
+      "revised_score": 0,
+      "revised_justification": "",
+      "revised_excluded_by_criterion": false,
+      "revised_exclusion_triggered": [],
+      "revised_inclusion_criteria_met": [],
+      "changes_summary": "",
+      "human_review_recommended": true
+    }}
+  ],
+  "summary": ""
+}}
+
+Rules:
+- revised_score must be an integer from 0 to 100.
+- If revised_excluded_by_criterion is true, revised_classification must be NOT-RELATED and revised_score must be 0.
+- Keep justifications short and direct.
+- Be conservative when evidence is weak.
+- Use UNSURE when the judge feedback indicates unresolved ambiguity.
+"""
+
+    try:
+        parsed_response = _extract_json_object(ask_llm(prompt))
+    except Exception:
+        parsed_response = {}
+
+    parsed_response = _normalize_article_revision_response(parsed_response, data)
+    result = ArticleClassificationRevisionResponse.model_validate(parsed_response)
+
+    if not result.summary.strip():
+        result.summary = _article_revision_summary(result.articles)
 
     return result.model_dump()
