@@ -23,3 +23,14 @@ Histórico de prompts submetidos ao agente Claude Code neste projeto.
 | 13 | Quais comandos devo usar para atualizar o container? |
 | 14 | Erro de encoding no script `pull_models.ps1`: caractere `—` (travessão) causando `ParseException` no PowerShell. |
 | 15 | Criar um novo arquivo MD chamado "UserPrompts" salvando todos os prompts de forma organizada (data, usuário e ordem). |
+
+---
+
+## 2026-07-09 — pevc-ecomp
+
+| # | Prompt |
+|---|---|
+| 1 | Criar uma nova opção padrão de agente para o avaliador de artigos que: (1) implemente a lógica para obter os dados do CSV; (2) tenha a capacidade de enviar os dados do CSV como string para a API da Claude, replicando a lógica do agente existente (duas etapas: uma para os títulos, outra para título + abstract); (3) receba a saída da API e gere o CSV de retorno. |
+| 2 | Após um merge que gerou conflitos em `article_evaluator.py` e `agents.py`, validar as mudanças, garantindo que o agente `article-evaluator-claude` e a nova funcionalidade `ai-judge-v2` continuem funcionando corretamente juntos. |
+| 3 | Atualizar a lista de prompts feitos no histórico manual (pasta "historiamento de prompts"). |
+| 4 | Atualizar também o `UserPrompts.md`. |

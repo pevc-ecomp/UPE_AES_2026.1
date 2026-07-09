@@ -1,8 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from core.config import get_settings
 from db import get_engine, init_db
@@ -168,6 +169,16 @@ app.add_middleware(
 )
 
 app.include_router(agents.router, prefix="/agents", tags=["agents"])
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Ensure any unexpected error still reaches the client as JSON with a
+    `detail` field — the frontend always parses error bodies as JSON, and
+    without this handler Starlette's default falls back to a plain-text
+    body that breaks that parsing."""
+    logging.getLogger(__name__).exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": f"Erro interno inesperado: {exc}"})
 
 
 @app.get("/health", tags=["health"])

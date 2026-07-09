@@ -1,0 +1,8 @@
+(1) - Create a new default agent option for the avaliatior agent that:
+1 - Makes the logic to get the data from the CSV
+2 - Has a skill to send the csv data as string to claude (API) for him to replicate the existing agent (same logic: one step for the titles and the next step for title + abstract)
+3 - receives the output of the API and generate the return csv
+
+(2) - I did a merge which conflicted in article_evaluator.py and agents.py. Validate these changes, considering that i want to have the article-evaluator-claude AND the new ai-judge-v2
+
+(3) - Atualize a lista de prompts que eu fiz no históriamento de prompts

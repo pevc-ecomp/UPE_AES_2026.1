@@ -289,7 +289,11 @@ def _build_revision_message(request: EvaluationRevisionRequest) -> str:
 
 
 def _normalize_evaluation(data: dict, fallback_title: str) -> EvaluationResponse:
-    score = max(0, min(100, int(data.get("score", 0))))
+    try:
+        score = int(data.get("score", 0))
+    except (TypeError, ValueError):
+        score = 0
+    score = max(0, min(100, score))
     excluded = bool(data.get("excluded_by_criterion", False))
     exclusion_triggered = _as_list(data.get("exclusion_triggered"))
     inclusion_met = _as_list(data.get("inclusion_criteria_met"))

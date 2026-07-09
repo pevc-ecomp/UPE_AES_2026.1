@@ -20,6 +20,55 @@ st.set_page_config(
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 PRESETS_FILE = Path("/app/data/article_presets.json")
 
+CSV_EXPORT_SEP = ";;"
+
+
+def _to_delimited_csv(df: pd.DataFrame, sep: str = CSV_EXPORT_SEP) -> bytes:
+    """Serialize a DataFrame with a two-character delimiter instead of pandas'
+    default single-character separator. Justification/reason columns are free
+    text that may contain commas or semicolons, so a single-char delimiter
+    risks false-positive column splits; every field is also quoted so the
+    delimiter itself can never be mistaken for one inside a value."""
+    def _escape(value) -> str:
+        text = "" if pd.isna(value) else str(value)
+        return '"' + text.replace('"', '""') + '"'
+
+    lines = [sep.join(_escape(c) for c in df.columns)]
+    for row in df.itertuples(index=False, name=None):
+        lines.append(sep.join(_escape(v) for v in row))
+    return ("\r\n".join(lines)).encode("utf-8")
+
+
+def _read_uploaded_csv(uploaded) -> pd.DataFrame:
+    """Read an uploaded CSV trying to auto-detect its separator/encoding.
+    Real-world exports (Scopus, WoS, Excel "CSV UTF-8", our own ';;'-delimited
+    export) use a variety of delimiters — hardcoding ',' broke on any file
+    that used ';' or a multi-char separator, since commas inside abstract
+    text get misread as extra column boundaries."""
+    attempts = [
+        {"sep": None, "engine": "python"},  # auto-sniff (comma, semicolon, tab, ...)
+        {"sep": CSV_EXPORT_SEP, "engine": "python"},
+        {"sep": ";"},
+        {"sep": ","},
+        {"sep": "\t"},
+    ]
+    last_error: Exception | None = None
+    for encoding in ("utf-8", "latin-1"):
+        for kwargs in attempts:
+            uploaded.seek(0)
+            try:
+                df = pd.read_csv(uploaded, encoding=encoding, **kwargs)
+            except Exception as exc:
+                last_error = exc
+                continue
+            if len(df.columns) > 1:
+                return df
+            last_error = ValueError(
+                "Apenas uma coluna foi detectada — o separador do arquivo provavelmente "
+                "não pôde ser identificado automaticamente."
+            )
+    raise last_error
+
 
 def _load_presets() -> dict:
     try:
@@ -162,6 +211,21 @@ def _protocol_errors(backend_ok: bool) -> list[str]:
     return errors
 
 
+def _format_error_detail(exc: httpx.HTTPStatusError) -> str:
+    try:
+        detail = exc.response.json().get("detail", exc.response.text or str(exc))
+    except Exception:
+        detail = exc.response.text or str(exc)
+    if isinstance(detail, list):
+        # FastAPI/pydantic validation errors: list of {"loc", "msg", ...} dicts
+        detail = "; ".join(
+            f"{'.'.join(str(p) for p in d.get('loc', []))}: {d.get('msg', d)}"
+            if isinstance(d, dict) else str(d)
+            for d in detail
+        )
+    return str(detail)
+
+
 def _call_evaluate(payload: dict) -> dict | None:
     try:
         resp = httpx.post(
@@ -172,8 +236,7 @@ def _call_evaluate(payload: dict) -> dict | None:
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as exc:
-        detail = exc.response.json().get("detail", str(exc))
-        st.error(f"Erro do backend: {detail}")
+        st.error(f"Erro do backend: {_format_error_detail(exc)}")
         return None
     except Exception as exc:
         st.error(f"Erro de conexão: {exc}")
@@ -190,8 +253,7 @@ def _call_evaluate_revision(payload: dict) -> dict | None:
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as exc:
-        detail = exc.response.json().get("detail", str(exc))
-        st.error(f"Erro do backend: {detail}")
+        st.error(f"Erro do backend: {_format_error_detail(exc)}")
         return None
     except Exception as exc:
         st.error(f"Erro de conexão: {exc}")
@@ -280,6 +342,18 @@ def _evaluation_result_to_revision_view(result: dict, original_verdict: str) -> 
     }
 
 
+def _revision_to_evaluation_result(revision_article: dict) -> dict:
+    return {
+        "score": revision_article.get("revised_score", 0),
+        "verdict": revision_article.get("revised_classification", "UNSURE"),
+        "reason": revision_article.get("revised_justification", ""),
+        "article_name": revision_article.get("title", ""),
+        "excluded_by_criterion": revision_article.get("revised_excluded_by_criterion", False),
+        "exclusion_triggered": revision_article.get("revised_exclusion_triggered", []),
+        "inclusion_criteria_met": revision_article.get("revised_inclusion_criteria_met", []),
+    }
+
+
 def _build_csv_judge_article(result_row: dict, judge_article: dict | None = None) -> dict:
     article_payload = {
         "title": result_row.get("_article_title") or result_row.get("article_name", ""),
@@ -327,13 +401,32 @@ def _apply_csv_judge_and_revision(
         "uncertain": 0,
         "incorrect": 0,
         "revised": 0,
+        "errors": 0,
     }
 
     for row in results:
-        article_payload = _build_csv_judge_article(row)
-        judge_request = _build_protocol_judge_request(protocol_context, [article_payload])
-        judge_result = judge_article_classifications(**judge_request)
-        judge_article = (judge_result.get("articles") or [{}])[0]
+        try:
+            article_payload = _build_csv_judge_article(row)
+            judge_request = _build_protocol_judge_request(protocol_context, [article_payload])
+            judge_result = judge_article_classifications(**judge_request)
+            judge_article = (judge_result.get("articles") or [{}])[0]
+        except Exception as exc:
+            # Isolate per-row failures (e.g. AI Judge timeout on one article) so a
+            # single bad row doesn't discard every row already judged in this batch.
+            judge_stats["errors"] += 1
+            enriched_row = dict(row)
+            enriched_row["judge_overall_result"] = f"ERRO: {exc}"
+            enriched_row["judge_verdict"] = ""
+            enriched_row["judge_confidence_score"] = ""
+            enriched_row["judge_justification"] = ""
+            enriched_row["judge_human_review_recommended"] = ""
+            enriched_row["v2_verdict"] = ""
+            enriched_row["v2_score"] = ""
+            enriched_row["v2_reason"] = ""
+            enriched_row["v2_changes_summary"] = ""
+            enriched_row["v2_human_review_recommended"] = ""
+            enriched_results.append(enriched_row)
+            continue
 
         enriched_row = dict(row)
         enriched_row["judge_overall_result"] = judge_result.get("overall_result", "")
@@ -705,10 +798,20 @@ if input_mode.startswith("📂"):
 
     if uploaded is not None:
         try:
-            df = pd.read_csv(uploaded)
-        except UnicodeDecodeError:
-            uploaded.seek(0)
-            df = pd.read_csv(uploaded, encoding="latin-1")
+            df = _read_uploaded_csv(uploaded)
+        except pd.errors.EmptyDataError:
+            st.error("O arquivo CSV está vazio.")
+            st.stop()
+        except pd.errors.ParserError as exc:
+            st.error(f"Não foi possível interpretar o CSV — verifique o formato/separador do arquivo. Detalhe: {exc}")
+            st.stop()
+        except Exception as exc:
+            st.error(f"Erro ao ler o CSV: {exc}")
+            st.stop()
+
+        if df.empty or not len(df.columns):
+            st.error("O arquivo CSV não contém dados ou colunas.")
+            st.stop()
 
         st.success(f"{len(df)} linha(s) carregada(s).")
         st.dataframe(df.head(10), use_container_width=True)
@@ -923,10 +1026,14 @@ if st.session_state.csv_results:
                 )
                 st.session_state.csv_results = enriched_results
                 st.session_state.csv_judge_summary = judge_stats
+                n_errors = judge_stats.get("errors", 0)
                 status.update(
-                    label="Julgamento em lote concluído com sucesso!",
-                    state="complete",
-                    expanded=False,
+                    label=(
+                        f"Julgamento em lote concluído com {n_errors} erro(s) por linha."
+                        if n_errors else "Julgamento em lote concluído com sucesso!"
+                    ),
+                    state="error" if n_errors else "complete",
+                    expanded=bool(n_errors),
                 )
                 st.rerun()
             except Exception as exc:
@@ -936,11 +1043,18 @@ if st.session_state.csv_results:
     if st.session_state.csv_judge_summary:
         judge_stats = st.session_state.csv_judge_summary
         st.markdown("**Resumo do AI Judge**")
-        j1, j2, j3, j4 = st.columns(4)
+        j1, j2, j3, j4, j5 = st.columns(5)
         j1.metric("CORRECT", judge_stats.get("correct", 0))
         j2.metric("UNCERTAIN", judge_stats.get("uncertain", 0))
         j3.metric("INCORRECT", judge_stats.get("incorrect", 0))
         j4.metric("Classification_v2", judge_stats.get("revised", 0))
+        j5.metric("Erros", judge_stats.get("errors", 0))
+        if judge_stats.get("errors", 0):
+            st.warning(
+                f"{judge_stats['errors']} linha(s) não puderam ser julgadas — veja a coluna "
+                "'judge_overall_result' no CSV exportado para o detalhe do erro em cada uma. "
+                "As demais linhas foram julgadas normalmente."
+            )
 
     results_df = pd.DataFrame(results)
     visible_cols = [c for c in results_df.columns if not c.startswith("_")]
@@ -980,13 +1094,18 @@ if st.session_state.csv_results:
         st.markdown("**Tabela do AI Judge e classification_v2**")
         st.dataframe(results_df[judge_show_cols], use_container_width=True)
 
-    csv_bytes = results_df[visible_cols].to_csv(index=False).encode("utf-8")
+    csv_bytes = _to_delimited_csv(results_df[visible_cols])
     st.download_button(
-        "⬇️ Baixar resultados (CSV)",
+        "⬇️ Baixar resultados (CSV, separador ';;')",
         data=csv_bytes,
         file_name="resultados_avaliacao.csv",
         mime="text/csv",
         use_container_width=True,
+    )
+    st.caption(
+        "O CSV exportado usa `;;` como separador de colunas (em vez de `,`) para evitar "
+        "que vírgulas ou ponto-e-vírgulas dentro dos textos de justificativa sejam "
+        "interpretados como quebra de coluna."
     )
 
     st.divider()

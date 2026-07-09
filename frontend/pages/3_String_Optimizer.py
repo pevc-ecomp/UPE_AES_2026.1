@@ -37,12 +37,16 @@ with st.sidebar:
     agent_models       = [DEFAULT_MODEL, DEFAULT_FALLBACK_MODEL]
     agent_temperature  = 0.2
 
+    backend_reachable = True
+    backend_error = None
     try:
         agents_resp = httpx.get(f"{BACKEND_URL}/agents", timeout=10)
         all_agents  = agents_resp.json() if agents_resp.status_code == 200 else []
         agents_list = [a for a in all_agents if a.get("agent_type") == "scopus-agent"]
-    except Exception:
+    except Exception as exc:
         agents_list = []
+        backend_reachable = False
+        backend_error = str(exc)
 
     if agents_list:
         agent_options = {
@@ -70,6 +74,8 @@ with st.sidebar:
             )
         else:
             st.warning("Agente sem versão ativa — usando configuração padrão.")
+    elif not backend_reachable:
+        st.error(f"Backend offline em `{BACKEND_URL}` — usando configuração padrão. Detalhe: {backend_error}")
     else:
         st.warning(
             "Nenhum agente 'scopus-agent' encontrado no backend — usando configuração padrão. "
