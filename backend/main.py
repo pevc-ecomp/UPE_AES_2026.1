@@ -23,6 +23,7 @@ def _seed_agent(
     temperature: float,
     model_primary: str,
     model_fallback: str,
+    provider: str = "ollama",
 ) -> None:
     from sqlmodel import Session, select
     from models.agent import Agent, AgentVersion
@@ -55,6 +56,7 @@ def _seed_agent(
                 version_description=version_description,
                 system_prompt=system_prompt,
                 temperature=temperature,
+                provider=provider,
                 model_primary=model_primary,
                 model_fallback=model_fallback,
                 author="system",
@@ -74,6 +76,10 @@ def _seed_default_agents() -> None:
     from agents.article_evaluator import (
         DEFAULT_SYSTEM_PROMPT as ARTICLE_EVALUATOR_PROMPT,
         SEED_VERSION_NAME as ARTICLE_EVALUATOR_VERSION,
+    )
+    from agents.claude_article_evaluator import (
+        DEFAULT_SYSTEM_PROMPT as CLAUDE_ARTICLE_EVALUATOR_PROMPT,
+        SEED_VERSION_NAME as CLAUDE_ARTICLE_EVALUATOR_VERSION,
     )
     from agents.scopus_agent import (
         DEFAULT_SYSTEM_PROMPT as SCOPUS_AGENT_PROMPT,
@@ -96,8 +102,29 @@ def _seed_default_agents() -> None:
         ),
         system_prompt=ARTICLE_EVALUATOR_PROMPT,
         temperature=0.1,
+        provider="ollama",
         model_primary=settings.ollama_model_primary,
         model_fallback=settings.ollama_model_fallback,
+    )
+
+    _seed_agent(
+        name="article-evaluator-claude",
+        agent_type="article-evaluator",
+        description=(
+            "Avalia a relevância de um artigo científico para um protocolo de "
+            "pesquisa usando a API da Claude (Anthropic) em vez do modelo local."
+        ),
+        seed_version_name=CLAUDE_ARTICLE_EVALUATOR_VERSION,
+        version_description=(
+            "Mesma lógica de avaliação em duas etapas do agente local (triagem "
+            "por título, depois pente fino com título + abstract + palavras-chave), "
+            "porém executada via API da Claude. Requer ANTHROPIC_API_KEY configurada."
+        ),
+        system_prompt=CLAUDE_ARTICLE_EVALUATOR_PROMPT,
+        temperature=0.1,
+        provider="anthropic",
+        model_primary=settings.anthropic_model_primary,
+        model_fallback=settings.anthropic_model_fallback,
     )
 
     _seed_agent(

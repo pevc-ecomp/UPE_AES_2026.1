@@ -25,10 +25,24 @@ def _migrate_agent_type_column() -> None:
             conn.commit()
 
 
+def _migrate_agent_version_provider_column() -> None:
+    """Add the provider column to pre-existing 'agent_version' tables (no Alembic in this project)."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        cols = conn.exec_driver_sql("PRAGMA table_info(agent_version)").fetchall()
+        col_names = {c[1] for c in cols}
+        if "provider" not in col_names:
+            conn.exec_driver_sql(
+                "ALTER TABLE agent_version ADD COLUMN provider TEXT DEFAULT 'ollama'"
+            )
+            conn.commit()
+
+
 def init_db():
     from models.agent import Agent, AgentVersion  # noqa: F401 — registers tables
     SQLModel.metadata.create_all(get_engine())
     _migrate_agent_type_column()
+    _migrate_agent_version_provider_column()
 
 
 def get_session():

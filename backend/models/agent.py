@@ -27,6 +27,7 @@ class AgentVersion(SQLModel, table=True):
     version_description: str = Field(default="", sa_column=Column("version_description", Text))
     system_prompt: str = Field(sa_column=Column("system_prompt", Text))
     temperature: float = 0.1
+    provider: str = Field(default="ollama", index=True)
     model_primary: str = "phi3:mini"
     model_fallback: str = "llama3.2:1b"
     author: str

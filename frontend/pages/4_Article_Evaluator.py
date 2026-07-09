@@ -487,6 +487,7 @@ with st.sidebar:
         if active_ver:
             st.caption(
                 f"Versão: **{active_ver['version_name']}**\n\n"
+                f"Provedor: `{active_ver.get('provider', 'ollama')}`\n\n"
                 f"Modelo: `{active_ver['model_primary']}`\n\n"
                 f"Temp: `{active_ver['temperature']}`"
             )

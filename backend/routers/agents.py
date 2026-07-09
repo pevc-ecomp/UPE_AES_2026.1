@@ -4,7 +4,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from agents.article_evaluator import evaluate_article as _evaluate
+from agents.article_evaluator import evaluate_article as _evaluate_ollama
+from agents.claude_article_evaluator import evaluate_article as _evaluate_claude
 from db import get_session
 from models.agent import Agent, AgentVersion
 from schemas.agent import (
@@ -115,8 +116,9 @@ async def evaluate_article_endpoint(
     if not agent_version:
         raise HTTPException(500, "Active version record not found")
 
+    evaluate = _evaluate_claude if agent_version.provider == "anthropic" else _evaluate_ollama
     try:
-        return await _evaluate(request, agent_version)
+        return await evaluate(request, agent_version)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
 

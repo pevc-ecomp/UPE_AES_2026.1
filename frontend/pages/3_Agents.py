@@ -8,7 +8,15 @@ st.set_page_config(page_title="Agentes", page_icon="🤖", layout="wide")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 DEFAULT_AUTHOR = "pevc-ecomp"
-DEFAULT_MODELS = ["phi3:mini", "llama3.2:1b", "mistral", "llama3:8b", "gemma2:2b"]
+MODELS_BY_PROVIDER = {
+    "ollama": ["phi3:mini", "llama3.2:1b", "mistral", "llama3:8b", "gemma2:2b"],
+    "anthropic": ["claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-opus-4-8"],
+}
+PROVIDERS = ["ollama", "anthropic"]
+PROVIDER_LABELS = {
+    "ollama": "Ollama (local)",
+    "anthropic": "Claude API (Anthropic)",
+}
 AGENT_TYPES = ["article-evaluator", "scopus-agent", "general"]
 AGENT_TYPE_LABELS = {
     "article-evaluator": "Avaliador de Artigos",
@@ -65,14 +73,20 @@ def _dialog_create_agent():
     v_desc = st.text_area("Descrição da versão", height=60)
     system_prompt = st.text_area("System Prompt *", height=300,
                                   placeholder="Insira o system prompt completo do agente...")
+    provider = st.selectbox("Provedor do LLM", PROVIDERS,
+                             format_func=lambda p: PROVIDER_LABELS.get(p, p))
+    model_options = MODELS_BY_PROVIDER[provider]
     col_t, col_m1, col_m2 = st.columns(3)
     with col_t:
         temperature = st.number_input("Temperature", min_value=0.0, max_value=2.0,
                                        value=0.1, step=0.05)
     with col_m1:
-        model_primary = st.selectbox("Modelo primário", DEFAULT_MODELS, index=0)
+        model_primary = st.selectbox("Modelo primário", model_options, index=0)
     with col_m2:
-        model_fallback = st.selectbox("Modelo fallback", DEFAULT_MODELS, index=1)
+        model_fallback = st.selectbox(
+            "Modelo fallback", model_options,
+            index=1 if len(model_options) > 1 else 0,
+        )
     author = st.text_input("Autor *", value=DEFAULT_AUTHOR)
 
     if st.button("Criar Agente", type="primary", use_container_width=True):
@@ -94,6 +108,7 @@ def _dialog_create_agent():
                 "version_description": v_desc.strip(),
                 "system_prompt": system_prompt.strip(),
                 "temperature": temperature,
+                "provider": provider,
                 "model_primary": model_primary,
                 "model_fallback": model_fallback,
                 "author": author.strip(),
@@ -135,6 +150,7 @@ def _dialog_create_version(
     agent_name: str,
     base_system_prompt: str = "",
     base_temperature: float = 0.1,
+    base_provider: str = "ollama",
     base_model_primary: str = "phi3:mini",
     base_model_fallback: str = "llama3.2:1b",
     base_label: str = "",
@@ -147,16 +163,23 @@ def _dialog_create_version(
     v_name = st.text_input("Nome da versão *", placeholder="Ex: v2.0 - Guardrails aprimorados")
     v_desc = st.text_area("Descrição das mudanças", height=70)
     system_prompt = st.text_area("System Prompt *", value=base_system_prompt, height=350)
+    provider = st.selectbox(
+        "Provedor do LLM", PROVIDERS,
+        index=PROVIDERS.index(base_provider) if base_provider in PROVIDERS else 0,
+        format_func=lambda p: PROVIDER_LABELS.get(p, p),
+    )
+    model_options = MODELS_BY_PROVIDER[provider]
     col_t, col_m1, col_m2 = st.columns(3)
     with col_t:
         temperature = st.number_input("Temperature", min_value=0.0, max_value=2.0,
                                        value=base_temperature, step=0.05)
     with col_m1:
-        idx1 = DEFAULT_MODELS.index(base_model_primary) if base_model_primary in DEFAULT_MODELS else 0
-        model_primary = st.selectbox("Modelo primário", DEFAULT_MODELS, index=idx1)
+        idx1 = model_options.index(base_model_primary) if base_model_primary in model_options else 0
+        model_primary = st.selectbox("Modelo primário", model_options, index=idx1)
     with col_m2:
-        idx2 = DEFAULT_MODELS.index(base_model_fallback) if base_model_fallback in DEFAULT_MODELS else 1
-        model_fallback = st.selectbox("Modelo fallback", DEFAULT_MODELS, index=idx2)
+        default_idx2 = 1 if len(model_options) > 1 else 0
+        idx2 = model_options.index(base_model_fallback) if base_model_fallback in model_options else default_idx2
+        model_fallback = st.selectbox("Modelo fallback", model_options, index=idx2)
     author = st.text_input("Autor *", value=DEFAULT_AUTHOR)
     activate = st.checkbox("Ativar esta versão imediatamente", value=False)
 
@@ -175,6 +198,7 @@ def _dialog_create_version(
             "version_description": v_desc.strip(),
             "system_prompt": system_prompt.strip(),
             "temperature": temperature,
+            "provider": provider,
             "model_primary": model_primary,
             "model_fallback": model_fallback,
             "author": author.strip(),
@@ -287,6 +311,7 @@ for agent in agents_data:
                     agent_name=agent["name"],
                     base_system_prompt=base.get("system_prompt", ""),
                     base_temperature=base.get("temperature", 0.1),
+                    base_provider=base.get("provider", "ollama"),
                     base_model_primary=base.get("model_primary", "phi3:mini"),
                     base_model_fallback=base.get("model_fallback", "llama3.2:1b"),
                 )
@@ -305,7 +330,9 @@ for agent in agents_data:
                             st.caption(ver["version_description"])
                         st.caption(
                             f"por {ver['author']} · {_fmt_ts(ver['created_at'])} · "
-                            f"temp={ver['temperature']} · {ver['model_primary']}"
+                            f"temp={ver['temperature']} · "
+                            f"{PROVIDER_LABELS.get(ver.get('provider', 'ollama'), ver.get('provider', 'ollama'))} · "
+                            f"{ver['model_primary']}"
                         )
 
                     with col_va:
@@ -325,6 +352,7 @@ for agent in agents_data:
                                 agent_name=agent["name"],
                                 base_system_prompt=ver.get("system_prompt", ""),
                                 base_temperature=ver.get("temperature", 0.1),
+                                base_provider=ver.get("provider", "ollama"),
                                 base_model_primary=ver.get("model_primary", "phi3:mini"),
                                 base_model_fallback=ver.get("model_fallback", "llama3.2:1b"),
                                 base_label=ver["version_name"],

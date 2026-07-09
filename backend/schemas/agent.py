@@ -9,6 +9,7 @@ class AgentVersionCreate(BaseModel):
     version_description: str = ""
     system_prompt: str = Field(..., min_length=1)
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    provider: str = Field(default="ollama", min_length=1, max_length=50)
     model_primary: str = "phi3:mini"
     model_fallback: str = "llama3.2:1b"
     author: str = Field(..., min_length=1, max_length=200)
@@ -23,6 +24,7 @@ class AgentVersionRead(BaseModel):
     version_description: str
     system_prompt: str
     temperature: float
+    provider: str
     model_primary: str
     model_fallback: str
     author: str
