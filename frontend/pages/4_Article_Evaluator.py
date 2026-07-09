@@ -6,6 +6,12 @@ import httpx
 import pandas as pd
 import streamlit as st
 
+from ai_judge_client import (
+    get_ai_judge_status,
+    judge_article_classifications,
+    revise_article_classifications,
+)
+
 st.set_page_config(
     page_title="Avaliador de Artigos",
     page_icon="📋",
@@ -38,6 +44,16 @@ if "csv_results" not in st.session_state:
     st.session_state.csv_results = []
 if "presets" not in st.session_state:
     st.session_state.presets = _load_presets()
+if "manual_article_context" not in st.session_state:
+    st.session_state.manual_article_context = None
+if "manual_protocol_context" not in st.session_state:
+    st.session_state.manual_protocol_context = None
+if "manual_judge_result" not in st.session_state:
+    st.session_state.manual_judge_result = None
+if "manual_revision_result" not in st.session_state:
+    st.session_state.manual_revision_result = None
+if "csv_judge_summary" not in st.session_state:
+    st.session_state.csv_judge_summary = None
 
 for _key, _default in [
     ("ev_title", ""),
@@ -165,6 +181,151 @@ def _call_evaluate(payload: dict) -> dict | None:
         return None
 
 
+def _criteria_to_multiline(criteria: list[str]) -> str:
+    return "\n".join(item.strip() for item in criteria if item.strip())
+
+
+def _build_manual_judge_article(article_context: dict, model_result: dict, judge_article: dict | None = None) -> dict:
+    payload = {
+        "title": article_context["title"],
+        "abstract": article_context["abstract"],
+        "keywords": article_context["keywords"],
+        "model_classification": model_result["verdict"],
+        "model_score": model_result["score"],
+        "model_justification": model_result["reason"],
+        "excluded_by_criterion": model_result.get("excluded_by_criterion", False),
+        "exclusion_triggered": model_result.get("exclusion_triggered", []),
+        "inclusion_criteria_met": model_result.get("inclusion_criteria_met", []),
+    }
+    if judge_article:
+        payload["judge_verdict"] = judge_article.get("judge_verdict")
+        payload["judge_justification"] = judge_article.get("judge_justification")
+        payload["human_review_recommended"] = judge_article.get("human_review_recommended")
+    return payload
+
+
+def _build_manual_judge_request(protocol_context: dict, article_payload: dict) -> dict:
+    return {
+        "review_objective": protocol_context.get("description", ""),
+        "protocol_description": protocol_context.get("description", ""),
+        "general_objectives": protocol_context.get("general_objectives", ""),
+        "specific_objectives": protocol_context.get("specific_objectives", ""),
+        "inclusion_criteria": _criteria_to_multiline(protocol_context.get("inclusion_criteria", [])),
+        "exclusion_criteria": _criteria_to_multiline(protocol_context.get("exclusion_criteria", [])),
+        "inclusion_logic": protocol_context.get("inclusion_logic", "ANY"),
+        "articles": [article_payload],
+    }
+
+
+def _revision_to_evaluation_result(revision_article: dict) -> dict:
+    return {
+        "score": revision_article.get("revised_score", 0),
+        "verdict": revision_article.get("revised_classification", "UNSURE"),
+        "reason": revision_article.get("revised_justification", ""),
+        "article_name": revision_article.get("title", ""),
+        "excluded_by_criterion": revision_article.get("revised_excluded_by_criterion", False),
+        "exclusion_triggered": revision_article.get("revised_exclusion_triggered", []),
+        "inclusion_criteria_met": revision_article.get("revised_inclusion_criteria_met", []),
+        "source": "classification_v2",
+    }
+
+
+def _build_csv_judge_article(result_row: dict, judge_article: dict | None = None) -> dict:
+    article_payload = {
+        "title": result_row.get("_article_title") or result_row.get("article_name", ""),
+        "abstract": result_row.get("_article_abstract", ""),
+        "keywords": result_row.get("_article_keywords", []),
+        "model_classification": result_row.get("verdict", "UNSURE"),
+        "model_score": result_row.get("score", 0),
+        "model_justification": result_row.get("reason", ""),
+        "excluded_by_criterion": result_row.get("excluded_by_criterion", False),
+        "exclusion_triggered": result_row.get("_exclusion_triggered_raw")
+        or result_row.get("exclusion_triggered")
+        or [],
+        "inclusion_criteria_met": result_row.get("_inclusion_criteria_met_raw")
+        or result_row.get("inclusion_criteria_met")
+        or [],
+    }
+    if judge_article:
+        article_payload["judge_verdict"] = judge_article.get("judge_verdict")
+        article_payload["judge_justification"] = judge_article.get("judge_justification")
+        article_payload["human_review_recommended"] = judge_article.get("human_review_recommended")
+    return article_payload
+
+
+def _build_protocol_judge_request(protocol_context: dict, articles: list[dict]) -> dict:
+    return {
+        "review_objective": protocol_context.get("description", ""),
+        "protocol_description": protocol_context.get("description", ""),
+        "general_objectives": protocol_context.get("general_objectives", ""),
+        "specific_objectives": protocol_context.get("specific_objectives", ""),
+        "inclusion_criteria": _criteria_to_multiline(protocol_context.get("inclusion_criteria", [])),
+        "exclusion_criteria": _criteria_to_multiline(protocol_context.get("exclusion_criteria", [])),
+        "inclusion_logic": protocol_context.get("inclusion_logic", "ANY"),
+        "articles": articles,
+    }
+
+
+def _apply_csv_judge_and_revision(results: list[dict], protocol_context: dict) -> tuple[list[dict], dict]:
+    enriched_results = []
+    judge_stats = {
+        "correct": 0,
+        "uncertain": 0,
+        "incorrect": 0,
+        "revised": 0,
+    }
+
+    for row in results:
+        article_payload = _build_csv_judge_article(row)
+        judge_request = _build_protocol_judge_request(protocol_context, [article_payload])
+        judge_result = judge_article_classifications(**judge_request)
+        judge_article = (judge_result.get("articles") or [{}])[0]
+
+        enriched_row = dict(row)
+        enriched_row["judge_overall_result"] = judge_result.get("overall_result", "")
+        enriched_row["judge_verdict"] = judge_article.get("judge_verdict", "")
+        enriched_row["judge_confidence_score"] = judge_article.get("confidence_score", "")
+        enriched_row["judge_justification"] = judge_article.get("judge_justification", "")
+        enriched_row["judge_human_review_recommended"] = judge_article.get(
+            "human_review_recommended",
+            True,
+        )
+
+        verdict = judge_article.get("judge_verdict")
+        if verdict == "CORRECT":
+            judge_stats["correct"] += 1
+        elif verdict == "INCORRECT":
+            judge_stats["incorrect"] += 1
+        else:
+            judge_stats["uncertain"] += 1
+
+        if verdict != "CORRECT":
+            revision_payload = _build_csv_judge_article(row, judge_article=judge_article)
+            revision_request = _build_protocol_judge_request(protocol_context, [revision_payload])
+            revision_result = revise_article_classifications(**revision_request)
+            revision_article = (revision_result.get("articles") or [{}])[0]
+
+            enriched_row["v2_verdict"] = revision_article.get("revised_classification", "")
+            enriched_row["v2_score"] = revision_article.get("revised_score", "")
+            enriched_row["v2_reason"] = revision_article.get("revised_justification", "")
+            enriched_row["v2_changes_summary"] = revision_article.get("changes_summary", "")
+            enriched_row["v2_human_review_recommended"] = revision_article.get(
+                "human_review_recommended",
+                True,
+            )
+            judge_stats["revised"] += 1
+        else:
+            enriched_row["v2_verdict"] = ""
+            enriched_row["v2_score"] = ""
+            enriched_row["v2_reason"] = ""
+            enriched_row["v2_changes_summary"] = ""
+            enriched_row["v2_human_review_recommended"] = ""
+
+        enriched_results.append(enriched_row)
+
+    return enriched_results, judge_stats
+
+
 # ── Dialogs ───────────────────────────────────────────────────────────────────
 
 @st.dialog("Salvar Preset")
@@ -288,6 +449,13 @@ with st.sidebar:
         st.error(f"❌ Backend offline\n\n`{BACKEND_URL}`")
         backend_ok = False
 
+    judge_ok, judge_message = get_ai_judge_status()
+    if judge_ok:
+        st.success("✅ AI Judge online")
+    else:
+        st.warning("AI Judge offline")
+        st.caption(judge_message)
+
     st.divider()
 
     # ── Agent selector ────────────────────────────────────────────────────────
@@ -339,6 +507,7 @@ with st.sidebar:
     if st.session_state.csv_results:
         if st.button("🗑️ Limpar resultados do CSV", use_container_width=True):
             st.session_state.csv_results = []
+            st.session_state.csv_judge_summary = None
             st.rerun()
 
 
@@ -540,11 +709,23 @@ if input_mode.startswith("📂"):
                 }
                 result = _call_evaluate(payload)
                 if result:
+                    raw_exclusion_triggered = result.get("exclusion_triggered", [])
+                    raw_inclusion_met = result.get("inclusion_criteria_met", [])
                     if isinstance(result.get("exclusion_triggered"), list):
                         result["exclusion_triggered"] = "; ".join(result["exclusion_triggered"])
                     if isinstance(result.get("inclusion_criteria_met"), list):
                         result["inclusion_criteria_met"] = "; ".join(result["inclusion_criteria_met"])
-                    results.append({**row.to_dict(), **result})
+                    results.append(
+                        {
+                            **row.to_dict(),
+                            **result,
+                            "_article_title": title[:1000],
+                            "_article_abstract": abstract[:10000],
+                            "_article_keywords": keywords,
+                            "_exclusion_triggered_raw": raw_exclusion_triggered,
+                            "_inclusion_criteria_met_raw": raw_inclusion_met,
+                        }
+                    )
                 else:
                     skipped += 1
 
@@ -555,6 +736,7 @@ if input_mode.startswith("📂"):
                 st.warning(f"{skipped} linha(s) ignorada(s) (dados incompletos ou erro de avaliação).")
 
             st.session_state.csv_results = results
+            st.session_state.csv_judge_summary = None
             st.rerun()
 
 # ── Modo manual (testes) ───────────────────────────────────────────────────────
@@ -613,6 +795,14 @@ else:
             if result is None:
                 st.stop()
 
+        st.session_state.manual_article_context = {
+            "title": title.strip(),
+            "abstract": abstract.strip(),
+            "keywords": keywords,
+        }
+        st.session_state.manual_protocol_context = payload["research_protocol"]
+        st.session_state.manual_judge_result = None
+        st.session_state.manual_revision_result = None
         st.session_state.evaluation_history.insert(0, result)
         st.rerun()
 
@@ -622,6 +812,7 @@ st.divider()
 # ── Resultados do CSV (lote) ───────────────────────────────────────────────────
 if st.session_state.csv_results:
     results = st.session_state.csv_results
+    protocol_context = _build_protocol_payload()
 
     st.subheader("📊 Resultados da Avaliação em Lote")
 
@@ -636,16 +827,80 @@ if st.session_state.csv_results:
     c3.metric("❌ NOT-RELATED", n_not_related)
     c4.metric("⛔ Excluídos por critério", n_excluded)
 
+    csv_judge_col, _ = st.columns([1, 2])
+    with csv_judge_col:
+        judge_csv_btn = st.button(
+            "⚖️ Julgar resultados do CSV com AI Judge",
+            type="secondary",
+            use_container_width=True,
+            disabled=(not judge_ok),
+        )
+
+    if judge_csv_btn:
+        with st.status("Julgando resultados em lote...", expanded=True) as status:
+            try:
+                st.write("Revisando coerência das classificações produzidas pelo avaliador...")
+                enriched_results, judge_stats = _apply_csv_judge_and_revision(results, protocol_context)
+                st.session_state.csv_results = enriched_results
+                st.session_state.csv_judge_summary = judge_stats
+                status.update(
+                    label="Julgamento em lote concluído com sucesso!",
+                    state="complete",
+                    expanded=False,
+                )
+                st.rerun()
+            except Exception as exc:
+                status.update(label="Erro no julgamento em lote", state="error", expanded=True)
+                st.error(str(exc))
+
+    if st.session_state.csv_judge_summary:
+        judge_stats = st.session_state.csv_judge_summary
+        st.markdown("**Resumo do AI Judge**")
+        j1, j2, j3, j4 = st.columns(4)
+        j1.metric("CORRECT", judge_stats.get("correct", 0))
+        j2.metric("UNCERTAIN", judge_stats.get("uncertain", 0))
+        j3.metric("INCORRECT", judge_stats.get("incorrect", 0))
+        j4.metric("Classification_v2", judge_stats.get("revised", 0))
+
     results_df = pd.DataFrame(results)
-    preferred_cols = [
+    visible_cols = [c for c in results_df.columns if not c.startswith("_")]
+
+    base_cols = [
         "article_name", "score", "verdict", "excluded_by_criterion",
         "exclusion_triggered", "inclusion_criteria_met", "reason",
     ]
-    show_cols = [c for c in preferred_cols if c in results_df.columns]
-    show_cols += [c for c in results_df.columns if c not in show_cols]
-    st.dataframe(results_df[show_cols], use_container_width=True)
+    base_show_cols = [c for c in base_cols if c in visible_cols]
+    base_show_cols += [
+        c for c in visible_cols
+        if c not in base_show_cols
+        and not c.startswith("judge_")
+        and not c.startswith("v2_")
+    ]
 
-    csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+    st.markdown("**Tabela da primeira avaliação**")
+    st.dataframe(results_df[base_show_cols], use_container_width=True)
+
+    if st.session_state.csv_judge_summary:
+        judge_cols = [
+            "article_name",
+            "verdict",
+            "score",
+            "judge_overall_result",
+            "judge_verdict",
+            "judge_confidence_score",
+            "judge_human_review_recommended",
+            "judge_justification",
+            "v2_verdict",
+            "v2_score",
+            "v2_human_review_recommended",
+            "v2_changes_summary",
+            "v2_reason",
+        ]
+        judge_show_cols = [c for c in judge_cols if c in visible_cols]
+        st.markdown("**Tabela do AI Judge e classification_v2**")
+        st.dataframe(results_df[judge_show_cols], use_container_width=True)
+
+    csv_bytes = results_df[visible_cols].to_csv(index=False).encode("utf-8")
     st.download_button(
         "⬇️ Baixar resultados (CSV)",
         data=csv_bytes,
@@ -700,6 +955,148 @@ if st.session_state.evaluation_history:
         st.markdown(f"**Artigo:** {latest['article_name']}")
         st.markdown("**Justificativa:**")
         st.markdown(latest["reason"])
+
+    article_context = st.session_state.manual_article_context
+    protocol_context = st.session_state.manual_protocol_context
+
+    judge_col, _ = st.columns([1, 2])
+    with judge_col:
+        judge_manual_btn = st.button(
+            "⚖️ Julgar decisão com AI Judge",
+            type="secondary",
+            use_container_width=True,
+            disabled=(not judge_ok or not article_context or not protocol_context),
+        )
+
+    if judge_manual_btn and article_context and protocol_context:
+        with st.status("Enviando avaliação ao AI Judge...", expanded=True) as status:
+            try:
+                article_payload = _build_manual_judge_article(article_context, latest)
+                judge_request = _build_manual_judge_request(protocol_context, article_payload)
+                st.write("Verificando coerência entre veredito, score, exclusões e critérios...")
+                judge_result = judge_article_classifications(**judge_request)
+                st.session_state.manual_judge_result = judge_result
+                st.session_state.manual_revision_result = None
+
+                judge_article = (judge_result.get("articles") or [{}])[0]
+                if judge_article.get("judge_verdict") != "CORRECT":
+                    st.write("O juiz encontrou inconsistências; gerando classification_v2...")
+                    revision_payload = _build_manual_judge_article(
+                        article_context,
+                        latest,
+                        judge_article=judge_article,
+                    )
+                    revision_request = _build_manual_judge_request(
+                        protocol_context,
+                        revision_payload,
+                    )
+                    st.session_state.manual_revision_result = revise_article_classifications(
+                        **revision_request
+                    )
+
+                status.update(
+                    label="Julgamento concluído com sucesso!",
+                    state="complete",
+                    expanded=False,
+                )
+            except Exception as exc:
+                st.session_state.manual_judge_result = None
+                st.session_state.manual_revision_result = None
+                status.update(label="Erro no julgamento", state="error", expanded=True)
+                st.error(str(exc))
+
+    judge_result = st.session_state.manual_judge_result
+    if judge_result:
+        st.markdown("---")
+        st.subheader("Parecer do AI as Judge")
+        st.success(f"Resultado geral: {judge_result.get('overall_result', '—')}")
+
+        summary = judge_result.get("summary", "")
+        if summary:
+            st.info(summary)
+
+        judge_article = (judge_result.get("articles") or [{}])[0]
+        with st.container(border=True):
+            left, right = st.columns(2)
+            with left:
+                st.markdown(f"Classificação do avaliador: `{judge_article.get('model_classification', '—')}`")
+                st.markdown(f"Veredito do juiz: `{judge_article.get('judge_verdict', '—')}`")
+            with right:
+                st.metric("Confiança do juiz", judge_article.get("confidence_score", "—"))
+                st.markdown(
+                    "Revisão humana recomendada: "
+                    f"`{judge_article.get('human_review_recommended', True)}`"
+                )
+
+            st.markdown("**Justificativa do juiz**")
+            st.write(judge_article.get("judge_justification", "") or "Sem justificativa informada.")
+
+        risks = judge_result.get("main_risks", [])
+        if risks:
+            st.markdown("**Principais riscos**")
+            for risk in risks:
+                st.warning(risk)
+
+    revision_result = st.session_state.manual_revision_result
+    if revision_result:
+        revision_article = (revision_result.get("articles") or [{}])[0]
+        st.markdown("---")
+        st.subheader("Classification_v2 gerada com feedback do juiz")
+
+        summary = revision_result.get("summary", "")
+        if summary:
+            st.info(summary)
+
+        revised_verdict = revision_article.get("revised_classification", "UNSURE")
+        revised_score = revision_article.get("revised_score", 0)
+        revised_excluded = revision_article.get("revised_excluded_by_criterion", False)
+        revised_inclusion = revision_article.get("revised_inclusion_criteria_met", [])
+        revised_exclusion = revision_article.get("revised_exclusion_triggered", [])
+
+        top_left, top_right = st.columns([3, 1])
+        with top_left:
+            st.markdown(
+                f"**Classificação original:** `{revision_article.get('original_classification', '—')}`"
+            )
+            st.markdown(f"**Classification_v2:** `{revised_verdict}`")
+            st.markdown("**Resumo das mudanças**")
+            st.write(revision_article.get("changes_summary", "") or "Sem resumo informado.")
+        with top_right:
+            st.metric("Score v2", revised_score)
+            st.markdown(
+                "Revisão humana recomendada: "
+                f"`{revision_article.get('human_review_recommended', True)}`"
+            )
+
+        if revised_excluded:
+            st.error("⛔ A classification_v2 marcou exclusão por critério.")
+        if revised_exclusion:
+            st.markdown("**Critérios de exclusão acionados na v2**")
+            for item in revised_exclusion:
+                st.error(f"• {item}")
+
+        if revised_inclusion and not revised_excluded:
+            st.markdown("**Critérios de inclusão satisfeitos na v2**")
+            for item in revised_inclusion:
+                st.markdown(f"✅ {item}")
+
+        with st.container(border=True):
+            st.markdown("**Justificativa da classification_v2**")
+            st.write(revision_article.get("revised_justification", "") or "Sem justificativa informada.")
+
+        use_v2_btn = st.button(
+            "Usar classification_v2 como resultado atual",
+            type="primary",
+            use_container_width=True,
+        )
+        if use_v2_btn:
+            st.session_state.evaluation_history.insert(
+                0,
+                _revision_to_evaluation_result(revision_article),
+            )
+            st.session_state.manual_judge_result = None
+            st.session_state.manual_revision_result = None
+            st.rerun()
 
     st.divider()
 

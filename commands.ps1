@@ -23,6 +23,7 @@ switch ($Command) {
         Write-Host "Servicos disponiveis:" -ForegroundColor Green
         Write-Host "  Frontend  -> http://localhost:8501"
         Write-Host "  Backend   -> http://localhost:8000/docs"
+        Write-Host "  AI Judge  -> http://localhost:8002/docs"
         Write-Host "  Ollama    -> http://localhost:11434"
         Write-Host "  Chroma    -> http://localhost:8001"
     }
