@@ -11,7 +11,12 @@ import json
 import re
 from typing import Awaitable, Callable
 
-from schemas.evaluation import EvaluationRequest, EvaluationResponse, Verdict
+from schemas.evaluation import (
+    EvaluationRequest,
+    EvaluationResponse,
+    EvaluationRevisionRequest,
+    Verdict,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ETAPA 1 — PENTE GROSSO (somente título)
@@ -245,6 +250,77 @@ def _build_human_message(request: EvaluationRequest) -> str:
     return "\n".join(lines)
 
 
+def _build_revision_message(request: EvaluationRevisionRequest) -> str:
+    lines = _protocol_header(request, include_inclusion=True)
+    lines.append("\n---\n## ARTIGO A REVISAR")
+    lines.append(f"\n**Título:** {request.title}")
+    lines.append(f"**Palavras-chave:** {', '.join(request.keywords)}")
+    lines.append(f"\n**Abstract:**\n{request.abstract}")
+
+    original = request.original_evaluation
+    lines.append("\n---\n## CLASSIFICAÇÃO ORIGINAL DO AVALIADOR")
+    lines.append(f"Score: {original.score}")
+    lines.append(f"Veredito: {original.verdict.value}")
+    lines.append(f"Justificativa: {original.reason}")
+    lines.append(f"Excluído por critério: {original.excluded_by_criterion}")
+    if original.exclusion_triggered:
+        lines.append("Critérios de exclusão acionados:")
+        for item in original.exclusion_triggered:
+            lines.append(f"- {item}")
+    if original.inclusion_criteria_met:
+        lines.append("Critérios de inclusão satisfeitos:")
+        for item in original.inclusion_criteria_met:
+            lines.append(f"- {item}")
+
+    judge = request.judge_feedback
+    lines.append("\n---\n## FEEDBACK DO AI JUDGE")
+    lines.append(f"Judge verdict: {judge.judge_verdict}")
+    lines.append(f"Confidence score: {judge.confidence_score}")
+    lines.append(f"Judge justification: {judge.judge_justification}")
+    lines.append(f"Human review recommended: {judge.human_review_recommended}")
+
+    lines.append(
+        "\n\nReavalie o artigo com base no protocolo e no feedback do juiz. "
+        "Responda SOMENTE com o JSON especificado no formato padrão de avaliação. "
+        "Mantenha a classificação original se ela estiver bem sustentada, mas "
+        "corrija-a se o feedback do juiz indicar um problema relevante."
+    )
+    return "\n".join(lines)
+
+
+def _normalize_evaluation(data: dict, fallback_title: str) -> EvaluationResponse:
+    score = max(0, min(100, int(data.get("score", 0))))
+    excluded = bool(data.get("excluded_by_criterion", False))
+    exclusion_triggered = _as_list(data.get("exclusion_triggered"))
+    inclusion_met = _as_list(data.get("inclusion_criteria_met"))
+
+    # Enforce exclusion invariant regardless of LLM score
+    if excluded or exclusion_triggered:
+        score = 0
+        excluded = True
+
+    verdict = _derive_verdict(score)
+
+    reason = str(data.get("reason", "")).strip()
+    if not reason:
+        if excluded and exclusion_triggered:
+            reason = f"Artigo excluído por violar: {'; '.join(exclusion_triggered)}."
+        elif excluded:
+            reason = "Artigo excluído por critério de exclusão."
+        else:
+            reason = f"Avaliação concluída com score {score} (verdict={verdict.value})."
+
+    return EvaluationResponse(
+        score=score,
+        verdict=verdict,
+        reason=reason,
+        article_name=str(data.get("article_name", fallback_title)),
+        excluded_by_criterion=excluded,
+        exclusion_triggered=exclusion_triggered,
+        inclusion_criteria_met=inclusion_met,
+    )
+
+
 async def _screen_by_title(
     request: EvaluationRequest, agent_version, invoke_llm: InvokeLLM
 ) -> EvaluationResponse | None:
@@ -281,37 +357,7 @@ async def _evaluate_full(
     """Step 2 — fine-tooth comb. Considers title, abstract and keywords."""
     human_content = _build_human_message(request)
     data = await invoke_llm(agent_version.system_prompt, human_content, agent_version)
-
-    score = max(0, min(100, int(data.get("score", 0))))
-    excluded = bool(data.get("excluded_by_criterion", False))
-    exclusion_triggered = _as_list(data.get("exclusion_triggered"))
-    inclusion_met = _as_list(data.get("inclusion_criteria_met"))
-
-    # Enforce exclusion invariant regardless of LLM score
-    if excluded or exclusion_triggered:
-        score = 0
-        excluded = True
-
-    verdict = _derive_verdict(score)
-
-    reason = str(data.get("reason", "")).strip()
-    if not reason:
-        if excluded and exclusion_triggered:
-            reason = f"Artigo excluído por violar: {'; '.join(exclusion_triggered)}."
-        elif excluded:
-            reason = "Artigo excluído por critério de exclusão."
-        else:
-            reason = f"Avaliação concluída com score {score} (verdict={verdict.value})."
-
-    return EvaluationResponse(
-        score=score,
-        verdict=verdict,
-        reason=reason,
-        article_name=str(data.get("article_name", request.title)),
-        excluded_by_criterion=excluded,
-        exclusion_triggered=exclusion_triggered,
-        inclusion_criteria_met=inclusion_met,
-    )
+    return _normalize_evaluation(data, request.title)
 
 
 async def run_two_step_evaluation(
@@ -326,3 +372,15 @@ async def run_two_step_evaluation(
         return rejection
 
     return await _evaluate_full(request, agent_version, invoke_llm)
+
+
+async def run_revision_evaluation(
+    request: EvaluationRevisionRequest, agent_version, invoke_llm: InvokeLLM
+) -> EvaluationResponse:
+    """Re-evaluate an article (using the step-2/pente-fino prompt) taking AI
+    Judge feedback on the original classification into account. Used by the
+    "AI as Judge" flow to produce a classification_v2 from the same agent
+    (and provider) that produced the original evaluation."""
+    human_content = _build_revision_message(request)
+    data = await invoke_llm(agent_version.system_prompt, human_content, agent_version)
+    return _normalize_evaluation(data, request.title)
