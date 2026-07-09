@@ -23,6 +23,7 @@ def _seed_agent(
     temperature: float,
     model_primary: str,
     model_fallback: str,
+    provider: str = "ollama",
 ) -> None:
     from sqlmodel import Session, select
     from models.agent import Agent, AgentVersion
@@ -55,6 +56,7 @@ def _seed_agent(
                 version_description=version_description,
                 system_prompt=system_prompt,
                 temperature=temperature,
+                provider=provider,
                 model_primary=model_primary,
                 model_fallback=model_fallback,
                 author="system",
@@ -75,6 +77,10 @@ def _seed_default_agents() -> None:
         DEFAULT_SYSTEM_PROMPT as ARTICLE_EVALUATOR_PROMPT,
         SEED_VERSION_NAME as ARTICLE_EVALUATOR_VERSION,
     )
+    from agents.claude_article_evaluator import (
+        DEFAULT_SYSTEM_PROMPT as CLAUDE_ARTICLE_EVALUATOR_PROMPT,
+        SEED_VERSION_NAME as CLAUDE_ARTICLE_EVALUATOR_VERSION,
+    )
     from agents.scopus_agent import (
         DEFAULT_SYSTEM_PROMPT as SCOPUS_AGENT_PROMPT,
         SEED_VERSION_NAME as SCOPUS_AGENT_VERSION,
@@ -86,14 +92,39 @@ def _seed_default_agents() -> None:
         description="Avalia a relevância de um artigo científico para um protocolo de pesquisa.",
         seed_version_name=ARTICLE_EVALUATOR_VERSION,
         version_description=(
-            "Suporte a Protocolo de Pesquisa completo: critérios de exclusão "
-            "eliminatórios, critérios de inclusão com lógica configurável "
-            "(ANY/ALL/expressão), e objetivos gerais e específicos da pesquisa."
+            "Avaliação em duas etapas: triagem inicial por título (pente grosso, "
+            "só rejeita com certeza) seguida de avaliação completa por título + "
+            "abstract + palavras-chave (pente fino). Suporte a Protocolo de "
+            "Pesquisa completo: critérios de exclusão eliminatórios, critérios de "
+            "inclusão com lógica configurável (ANY/ALL/expressão), e objetivos "
+            "gerais e específicos da pesquisa. Este system prompt rege apenas a "
+            "etapa 2 (pente fino); a etapa 1 usa um prompt fixo definido no código."
         ),
         system_prompt=ARTICLE_EVALUATOR_PROMPT,
         temperature=0.1,
+        provider="ollama",
         model_primary=settings.ollama_model_primary,
         model_fallback=settings.ollama_model_fallback,
+    )
+
+    _seed_agent(
+        name="article-evaluator-claude",
+        agent_type="article-evaluator",
+        description=(
+            "Avalia a relevância de um artigo científico para um protocolo de "
+            "pesquisa usando a API da Claude (Anthropic) em vez do modelo local."
+        ),
+        seed_version_name=CLAUDE_ARTICLE_EVALUATOR_VERSION,
+        version_description=(
+            "Mesma lógica de avaliação em duas etapas do agente local (triagem "
+            "por título, depois pente fino com título + abstract + palavras-chave), "
+            "porém executada via API da Claude. Requer ANTHROPIC_API_KEY configurada."
+        ),
+        system_prompt=CLAUDE_ARTICLE_EVALUATOR_PROMPT,
+        temperature=0.1,
+        provider="anthropic",
+        model_primary=settings.anthropic_model_primary,
+        model_fallback=settings.anthropic_model_fallback,
     )
 
     _seed_agent(

@@ -1,10 +1,13 @@
-import json
 import logging
-import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
+from agents.evaluation_core import (
+    DEFAULT_SYSTEM_PROMPT,
+    _extract_json,
+    run_two_step_evaluation,
+)
 from core.config import get_settings
 from schemas.evaluation import (
     EvaluationRequest,
@@ -15,14 +18,10 @@ from schemas.evaluation import (
 
 logger = logging.getLogger(__name__)
 
-SEED_VERSION_NAME = "v2.0 - Protocolo de Pesquisa"
+SEED_VERSION_NAME = "v3.0 - Triagem em Duas Etapas (Título + Abstract)"
 
-DEFAULT_SYSTEM_PROMPT = """\
-Você é um sistema especializado em avaliação de relevância de artigos científicos \
-para protocolos de pesquisa sistemática.
+__all__ = ["DEFAULT_SYSTEM_PROMPT", "SEED_VERSION_NAME", "evaluate_article"]
 
-SUA ÚNICA FUNÇÃO é determinar se um artigo científico é relevante para o protocolo \
-de pesquisa fornecido pelo usuário.
 
 ═══════════════════════════════════════════════
 REGRAS DE SEGURANÇA (prioridade máxima)
@@ -242,7 +241,7 @@ async def _run_article_evaluation(agent_version, fallback_title: str, human_cont
                 format="json",
             )
             messages = [
-                SystemMessage(content=agent_version.system_prompt),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=human_content),
             ]
             response = await llm.ainvoke(messages)

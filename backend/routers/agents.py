@@ -6,6 +6,8 @@ from sqlmodel import Session, select
 
 from agents.article_evaluator import evaluate_article as _evaluate
 from agents.article_evaluator import revise_article_evaluation as _revise_evaluation
+from agents.article_evaluator import evaluate_article as _evaluate_ollama
+from agents.claude_article_evaluator import evaluate_article as _evaluate_claude
 from db import get_session
 from models.agent import Agent, AgentVersion
 from schemas.agent import (
@@ -138,6 +140,7 @@ async def revise_article_evaluation_endpoint(
 ):
     _, agent_version = _resolve_article_evaluator_agent(request.agent_id, session)
 
+    evaluate = _evaluate_claude if agent_version.provider == "anthropic" else _evaluate_ollama
     try:
         return await _revise_evaluation(request, agent_version)
     except RuntimeError as exc:
