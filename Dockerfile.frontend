@@ -17,6 +17,10 @@ RUN uv pip install --system --no-cache -r requirements.frontend.txt
 # ── Código da aplicação ───────────────────────────────────────────────────────
 COPY ./frontend ./frontend
 
+# Streamlit procura .streamlit/config.toml no diretório de trabalho (/app),
+# não no diretório do script — sem esta cópia o tema/config não é aplicado.
+COPY ./frontend/.streamlit ./.streamlit
+
 # ── Python path para imports entre páginas ───────────────────────────────────
 ENV PYTHONPATH=/app/frontend
 

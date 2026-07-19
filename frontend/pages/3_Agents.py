@@ -4,7 +4,10 @@ from datetime import datetime
 import httpx
 import streamlit as st
 
+import ui
+
 st.set_page_config(page_title="Agentes", page_icon="🤖", layout="wide")
+ui.apply_style()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 DEFAULT_AUTHOR = "pevc-ecomp"

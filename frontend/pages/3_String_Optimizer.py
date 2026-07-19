@@ -5,15 +5,19 @@ import httpx
 import ollama
 import streamlit as st
 
+import history_store
 from ai_judge_client import get_ai_judge_status, judge_search_string
 from scopus_agent import improve_query_with_judge_feedback, optimize_query, simulate_results, refine_query
 from text_analysis import compute_tfidf, compute_term_weights
+
+import ui
 
 st.set_page_config(
     page_title="String Optimizer",
     page_icon="🔎",
     layout="wide",
 )
+ui.apply_style()
 
 st.title("🔎 String Optimizer")
 st.markdown(
@@ -161,6 +165,16 @@ if optimize_btn:
             st.session_state.iteration    = 1
             st.session_state.judge_result = None
             st.session_state.judge_improved_result = None
+            history_store.save_record(
+                history_store.KIND_STRING_OPTIMIZER,
+                {
+                    "action": "optimize",
+                    "agent_id": selected_agent_id,
+                    "research_question": query,
+                    "result": result,
+                    "active_string": st.session_state.active_string,
+                },
+            )
             status.update(label="String otimizada com sucesso!", state="complete", expanded=False)
         except Exception as e:
             status.update(label="Erro na otimização", state="error", expanded=True)
@@ -261,6 +275,17 @@ if st.session_state.opt_result:
                         temperature=agent_temperature,
                         on_step=st.write,
                     )
+                history_store.save_record(
+                    history_store.KIND_AI_JUDGE,
+                    {
+                        "mode": "search_string",
+                        "source": "string_optimizer",
+                        "topic": st.session_state.original_query or query,
+                        "search_string": st.session_state.active_string,
+                        "judge_result": st.session_state.judge_result,
+                        "improved_result": st.session_state.judge_improved_result,
+                    },
+                )
                 status.update(
                     label="Julgamento concluído com sucesso!",
                     state="complete",
@@ -587,6 +612,17 @@ if st.session_state.term_weights:
                 st.session_state.tfidf_data = compute_tfidf(results)
                 st.write("TF-IDF calculado sobre os novos artigos.")
                 st.session_state.iteration += 1
+                history_store.save_record(
+                    history_store.KIND_STRING_OPTIMIZER,
+                    {
+                        "action": "refine",
+                        "agent_id": selected_agent_id,
+                        "research_question": st.session_state.original_query,
+                        "iteration": st.session_state.iteration,
+                        "search_string": new_string,
+                        "articles_returned": len(results),
+                    },
+                )
                 status.update(
                     label=f"Nova busca concluída! ({len(results)} artigos · iteração {st.session_state.iteration})",
                     state="complete",

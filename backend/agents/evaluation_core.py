@@ -230,6 +230,8 @@ def _build_title_screening_message(request: EvaluationRequest) -> str:
     lines = _protocol_header(request, include_inclusion=False)
     lines.append("\n---\n## ARTIGO A TRIAR (apenas o título está disponível nesta etapa)")
     lines.append(f"\n**Título:** {request.title}")
+    if request.year:
+        lines.append(f"**Ano de publicação:** {request.year}")
     lines.append(
         "\n\nResponda SOMENTE com o JSON especificado. "
         "Na dúvida, encaminhe o artigo (reject=false)."
@@ -241,6 +243,8 @@ def _build_human_message(request: EvaluationRequest) -> str:
     lines = _protocol_header(request, include_inclusion=True)
     lines.append("\n---\n## ARTIGO A AVALIAR")
     lines.append(f"\n**Título:** {request.title}")
+    if request.year:
+        lines.append(f"**Ano de publicação:** {request.year}")
     lines.append(f"**Palavras-chave:** {', '.join(request.keywords)}")
     lines.append(f"\n**Abstract:**\n{request.abstract}")
     lines.append(
@@ -254,6 +258,8 @@ def _build_revision_message(request: EvaluationRevisionRequest) -> str:
     lines = _protocol_header(request, include_inclusion=True)
     lines.append("\n---\n## ARTIGO A REVISAR")
     lines.append(f"\n**Título:** {request.title}")
+    if request.year:
+        lines.append(f"**Ano de publicação:** {request.year}")
     lines.append(f"**Palavras-chave:** {', '.join(request.keywords)}")
     lines.append(f"\n**Abstract:**\n{request.abstract}")
 

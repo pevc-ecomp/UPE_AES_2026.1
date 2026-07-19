@@ -4,11 +4,15 @@ import os
 import httpx
 import streamlit as st
 
+import history_store
+import ui
+
 st.set_page_config(
     page_title="AI Judge",
     page_icon="⚖️",
     layout="wide",
 )
+ui.apply_style()
 
 IA_JUDGE_URL = os.getenv("IA_JUDGE_URL", "http://localhost:8002")
 
@@ -218,6 +222,15 @@ with tab_string:
                 result = _post_json("/judge/string", payload)
 
             if result:
+                history_store.save_record(
+                    history_store.KIND_AI_JUDGE,
+                    {
+                        "mode": "search_string",
+                        "source": "ai_judge_page",
+                        "request": payload,
+                        "judge_result": result,
+                    },
+                )
                 st.success(
                     f"Decisão: {result.get('decision', '—')} · Score final: {result.get('final_score', '—')}/5"
                 )
@@ -333,6 +346,15 @@ with tab_articles:
                 result = _post_json("/judge/articles", payload)
 
             if result:
+                history_store.save_record(
+                    history_store.KIND_AI_JUDGE,
+                    {
+                        "mode": "article_classifications",
+                        "source": "ai_judge_page",
+                        "request": payload,
+                        "judge_result": result,
+                    },
+                )
                 st.success(f"Resultado geral: {result.get('overall_result', '—')}")
 
                 summary = result.get("summary", "")

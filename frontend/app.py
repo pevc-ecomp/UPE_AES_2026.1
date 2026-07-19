@@ -1,6 +1,9 @@
 import os
+
+import httpx
 import streamlit as st
-from utils import get_client, list_collections
+
+import ui
 
 st.set_page_config(
     page_title="Research Assistant",
@@ -8,6 +11,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+ui.apply_style()
 
 # ── Cabeçalho ────────────────────────────────────────────────────────────────
 st.title("🔬 Scientific Research Assistant")
@@ -17,23 +21,12 @@ st.divider()
 # ── Status dos serviços ──────────────────────────────────────────────────────
 st.subheader("🖥️ Status dos Serviços")
 
-col_chroma, col_backend, col_ollama = st.columns(3)
-
-with col_chroma:
-    client = get_client()
-    if client:
-        collections = list_collections(client)
-        st.success("✅ Chroma — online")
-        st.caption(f"{len(collections)} coleção(ões) disponível(is)")
-    else:
-        st.error("❌ Chroma — offline")
-        st.caption("Verifique se o container está rodando")
+col_backend, col_ollama, col_judge = st.columns(3)
 
 with col_backend:
-    import httpx as _httpx
     backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
     try:
-        _r = _httpx.get(f"{backend_url}/health", timeout=3)
+        _r = httpx.get(f"{backend_url}/health", timeout=3)
         if _r.status_code == 200:
             st.success(f"✅ Backend — online\n\n`{backend_url}`")
         else:
@@ -44,23 +37,27 @@ with col_backend:
 with col_ollama:
     ollama_host = os.getenv("OLLAMA_HOST", "http://ollama:11434")
     model = os.getenv("OLLAMA_MODEL_PRIMARY", "phi3:mini")
-    st.info(f"🦙 Ollama\n\n`{model}`")
+    try:
+        _r = httpx.get(f"{ollama_host}/api/tags", timeout=3)
+        if _r.status_code == 200:
+            st.success(f"✅ Ollama — online\n\n`{model}`")
+        else:
+            st.warning(f"⚠️ Ollama — erro\n\n`{ollama_host}`")
+    except Exception:
+        st.error(f"❌ Ollama — offline\n\n`{ollama_host}`")
+
+with col_judge:
+    judge_url = os.getenv("IA_JUDGE_URL", "http://localhost:8002")
+    try:
+        _r = httpx.get(f"{judge_url}/status", timeout=3)
+        if _r.status_code == 200:
+            st.success(f"✅ AI Judge — online\n\n`{judge_url}`")
+        else:
+            st.warning(f"⚠️ AI Judge — erro\n\n`{judge_url}`")
+    except Exception:
+        st.error(f"❌ AI Judge — offline\n\n`{judge_url}`")
 
 st.divider()
-
-# ── Coleções existentes ───────────────────────────────────────────────────────
-if client:
-    collections = list_collections(client)
-    if collections:
-        st.subheader("📚 Coleções no Vector Store")
-        cols = st.columns(min(len(collections), 4))
-        for i, name in enumerate(collections):
-            with cols[i % 4]:
-                col = client.get_collection(name)
-                with st.container(border=True):
-                    st.markdown(f"**{name}**")
-                    st.caption(f"{col.count()} documento(s)")
-        st.divider()
 
 # ── Descrição das páginas ────────────────────────────────────────────────────
 st.subheader("📋 Páginas disponíveis")
@@ -70,48 +67,43 @@ p4, p5, p6 = st.columns(3)
 
 with p1:
     with st.container(border=True):
-        st.markdown("### 🏠 Home")
+        st.markdown("### 🤖 Agentes")
         st.markdown(
-            "Esta página. Mostra o status dos serviços e as "
-            "coleções existentes no vector store."
+            "Gerencie os agentes de IA da plataforma: versões, "
+            "prompts, modelos e provedores (Ollama ou Claude API)."
         )
 
 with p2:
     with st.container(border=True):
-        st.markdown("### 🔍 Query Chroma")
+        st.markdown("### 🔎 String Optimizer")
         st.markdown(
-            "Busca semântica em documentos indexados. "
-            "Digite qualquer texto e veja os resultados mais similares."
+            "Construa strings de busca otimizadas para o Scopus e "
+            "refine-as iterativamente com simulação de resultados."
         )
 
 with p3:
     with st.container(border=True):
-        st.markdown("### 📄 Upload PDF")
+        st.markdown("### 📋 Avaliador de Artigos")
         st.markdown(
-            "Faça upload de PDFs para indexar no Chroma. "
-            "O texto é extraído, dividido em chunks e vetorizado automaticamente."
+            "Avalia a relevância de artigos científicos para um protocolo "
+            "de pesquisa em duas etapas, com suporte a lote via CSV."
         )
 
 with p4:
-    with st.container(border=True):
-        st.markdown("### 🤖 Agentes")
-        st.markdown(
-            "Lista todos os agentes de IA disponíveis "
-            "na plataforma com seus endpoints e status."
-        )
-
-with p5:
-    with st.container(border=True):
-        st.markdown("### 📋 Avaliador de Artigos")
-        st.markdown(
-            "Avalia a relevância de um artigo científico para uma pesquisa "
-            "usando um agente LLM com guardrails anti-injeção."
-        )
-
-with p6:
     with st.container(border=True):
         st.markdown("### ⚖️ AI Judge")
         st.markdown(
             "Revisa strings de busca e decisões de classificação feitas por "
             "outro modelo, retornando parecer estruturado e riscos."
         )
+
+with p5:
+    with st.container(border=True):
+        st.markdown("### 🗂️ Histórico")
+        st.markdown(
+            "Consulte execuções anteriores do String Optimizer, do "
+            "Avaliador de Artigos e do AI Judge, com entradas e saídas."
+        )
+
+with p6:
+    st.empty()

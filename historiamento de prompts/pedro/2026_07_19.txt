@@ -1,0 +1,19 @@
+(1) - Adapte a logica de artigos par avaliação para ter um input que é o ano do artigo.
+
+Remova as paginas de query chroma e upload pdf. Adicione uma página de histórico com 3 abas: O histórico do String Optimizer, o histórico de article evaluator e o histórico de ai judge.
+
+O histórico de article evaluator tem que ter o input do usuário (tanto o protocolo de pesquisa quanto o arquivo csv com os arquivos de artigos para avaliação) e o arquivo de saída do agente.
+
+Melhore o visual do frontend.
+
+Atualize o histórico de prompts. Faça cada parte individualmente, para que caso os tokens acabem, não seja perdido muito progresso.
+
+(2) - O meu notebook travou no meio dessa instrução, verifique o que foi feito e continue
+
+(3) - O sistema rodando LLM localmente usando ollama é lento e usando API é caro demais. Qual seria uma IA harness que poderia melhorar a eficiencia do meu sistema? Openclaw? Note: Meu notebook tem 16gb de mmoria, elmbrando que parte disso está sendo usado pelos containers
+
+(4) - Salve os prompts.
+
+Em seguida, implemente o haiku na etapa 1 e adapte o prompt chaching. Apenas em seguida, implemente o 3 como uma opção alternativa (por padrão, o usuário manda individualmente, mas pode mandar comobatch API caso deseje).
+
+E estou em duvida: Considerando a situação 3, precisarei deixar o container ligado até que o batch seja executado? Não vejo como conseguiria dar retrieve dos resultados

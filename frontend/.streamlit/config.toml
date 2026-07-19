@@ -1,8 +1,16 @@
 [server]
-maxUploadSize = 50        # MB — tamanho máximo de upload de PDF
+maxUploadSize = 50        # MB — tamanho máximo de upload de CSV
 
 [browser]
 gatherUsageStats = false  # desabilita telemetria do Streamlit
 
 [runner]
 fastReruns = true
+
+[theme]
+base = "light"
+primaryColor = "#4F46E5"             # indigo — botões primários, links, foco
+backgroundColor = "#FAFAFC"
+secondaryBackgroundColor = "#EEF1F6" # sidebar, inputs, expanders
+textColor = "#1E2430"
+font = "sans serif"

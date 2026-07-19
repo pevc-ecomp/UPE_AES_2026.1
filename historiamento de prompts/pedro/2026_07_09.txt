@@ -6,3 +6,9 @@
 (2) - I did a merge which conflicted in article_evaluator.py and agents.py. Validate these changes, considering that i want to have the article-evaluator-claude AND the new ai-judge-v2
 
 (3) - Atualize a lista de prompts que eu fiz no históriamento de prompts
+
+(4) - Agora simule erros nas principais funcionalidades e verifique se está tendo feedback para usuário final do que aconteceu, caso não esteja, corrija
+
+(5) - altere o output do agente de avaliação para retornar um csv separado por ";;" e não ",", para garantir a separação sem falso positivos das colunas
+
+(6) - Ao tentar importar o arquivo Input_artigos_example, ele dá o erro Não foi possível interpretar o CSV — verifique o formato/separador do arquivo. Detalhe: Error tokenizing data. C error: Expected 19 fields in line 8, saw 21

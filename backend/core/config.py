@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model_primary: str = "claude-sonnet-5"
     anthropic_model_fallback: str = "claude-haiku-4-5-20251001"
+    # Modelo barato usado na etapa 1 (triagem por título) — decisão binária
+    # simples, não precisa do modelo principal.
+    anthropic_model_screening: str = "claude-haiku-4-5"
     backend_url: str = "http://backend:8000"
     database_url: str = "sqlite:////app/data/research.db"
     log_level: str = "INFO"

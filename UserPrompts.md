@@ -34,3 +34,17 @@ Histórico de prompts submetidos ao agente Claude Code neste projeto.
 | 2 | Após um merge que gerou conflitos em `article_evaluator.py` e `agents.py`, validar as mudanças, garantindo que o agente `article-evaluator-claude` e a nova funcionalidade `ai-judge-v2` continuem funcionando corretamente juntos. |
 | 3 | Atualizar a lista de prompts feitos no histórico manual (pasta "historiamento de prompts"). |
 | 4 | Atualizar também o `UserPrompts.md`. |
+| 5 | Simular erros nas principais funcionalidades e verificar se o usuário final recebe feedback do que aconteceu; corrigir onde não houver. |
+| 6 | Alterar o output do agente de avaliação para retornar um CSV separado por `;;` em vez de `,`, garantindo a separação das colunas sem falsos positivos. |
+| 7 | Corrigir erro ao importar o arquivo `Input_artigos_example.csv`: "Não foi possível interpretar o CSV — Error tokenizing data. C error: Expected 19 fields in line 8, saw 21". |
+
+---
+
+## 2026-07-19 — pevc-ecomp
+
+| # | Prompt |
+|---|---|
+| 1 | Adaptar a lógica de avaliação de artigos para ter um input com o ano do artigo; remover as páginas Query Chroma e Upload PDF; adicionar uma página de Histórico com 3 abas (String Optimizer, Article Evaluator e AI Judge), sendo que o histórico do Article Evaluator deve conter o input do usuário (protocolo de pesquisa e CSV de artigos) e o arquivo de saída do agente; melhorar o visual do frontend; atualizar o histórico de prompts — fazendo cada parte individualmente para não perder progresso caso os tokens acabem. |
+| 2 | O notebook travou no meio da instrução anterior: verificar o que já foi feito e continuar. |
+| 3 | O sistema rodando LLM local (Ollama) é lento e a API é cara demais: qual harness de IA poderia melhorar a eficiência (OpenClaw?), considerando notebook com 16GB de RAM compartilhados com os containers? |
+| 4 | Salvar os prompts; implementar Haiku na etapa 1 e prompt caching; depois implementar a Batch API como opção alternativa (padrão continua envio individual). Dúvida: com a Batch API, o container precisa ficar ligado até o batch executar para conseguir dar retrieve dos resultados? |

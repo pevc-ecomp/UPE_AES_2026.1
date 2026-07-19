@@ -8,6 +8,11 @@ from agents.article_evaluator import evaluate_article as _evaluate_ollama
 from agents.article_evaluator import revise_article_evaluation as _revise_ollama
 from agents.claude_article_evaluator import evaluate_article as _evaluate_claude
 from agents.claude_article_evaluator import revise_article_evaluation as _revise_claude
+from agents.claude_batch_evaluator import (
+    get_batch_status,
+    list_batch_jobs,
+    start_batch_evaluation,
+)
 from db import get_session
 from models.agent import Agent, AgentVersion
 from schemas.agent import (
@@ -17,7 +22,13 @@ from schemas.agent import (
     AgentVersionCreate,
     AgentVersionRead,
 )
-from schemas.evaluation import EvaluationRequest, EvaluationResponse, EvaluationRevisionRequest
+from schemas.evaluation import (
+    BatchEvaluationRequest,
+    BatchJobStatus,
+    EvaluationRequest,
+    EvaluationResponse,
+    EvaluationRevisionRequest,
+)
 
 router = APIRouter()
 
@@ -132,6 +143,43 @@ async def evaluate_article_endpoint(
         return await evaluate(request, agent_version)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
+
+
+@router.post("/evaluate-article/batch", response_model=BatchJobStatus, status_code=201)
+def start_batch_evaluation_endpoint(
+    request: BatchEvaluationRequest,
+    session: Session = Depends(get_session),
+):
+    """Envia o lote para a Batch API da Anthropic (processamento assíncrono,
+    50% de desconto). O job fica persistido em disco — consulte o status pelo
+    endpoint GET a qualquer momento, mesmo após reiniciar o container."""
+    _, agent_version = _resolve_article_evaluator_agent(request.agent_id, session)
+    if agent_version.provider != "anthropic":
+        raise HTTPException(
+            400,
+            "A Batch API só está disponível para agentes com provider 'anthropic' "
+            f"(o agente selecionado usa '{agent_version.provider}').",
+        )
+    try:
+        return start_batch_evaluation(request, agent_version)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+
+@router.get("/evaluate-article/batch", response_model=list[BatchJobStatus])
+def list_batch_jobs_endpoint():
+    return list_batch_jobs()
+
+
+@router.get("/evaluate-article/batch/{job_id}", response_model=BatchJobStatus)
+def get_batch_status_endpoint(job_id: str):
+    try:
+        status = get_batch_status(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    if status is None:
+        raise HTTPException(404, f"Job de batch '{job_id}' não encontrado")
+    return status
 
 
 @router.post("/evaluate-article/revise", response_model=EvaluationResponse)

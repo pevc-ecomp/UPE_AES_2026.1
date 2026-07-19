@@ -6,16 +6,20 @@ import httpx
 import pandas as pd
 import streamlit as st
 
+import history_store
 from ai_judge_client import (
     get_ai_judge_status,
     judge_article_classifications,
 )
+
+import ui
 
 st.set_page_config(
     page_title="Avaliador de Artigos",
     page_icon="📋",
     layout="wide",
 )
+ui.apply_style()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 PRESETS_FILE = Path("/app/data/article_presets.json")
@@ -90,6 +94,8 @@ if "evaluation_history" not in st.session_state:
     st.session_state.evaluation_history = []
 if "csv_results" not in st.session_state:
     st.session_state.csv_results = []
+if "csv_history_id" not in st.session_state:
+    st.session_state.csv_history_id = None
 if "presets" not in st.session_state:
     st.session_state.presets = _load_presets()
 if "manual_article_context" not in st.session_state:
@@ -243,6 +249,76 @@ def _call_evaluate(payload: dict) -> dict | None:
         return None
 
 
+def _call_start_batch(payload: dict) -> dict | None:
+    try:
+        resp = httpx.post(
+            f"{BACKEND_URL}/agents/evaluate-article/batch",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        st.error(f"Erro do backend: {_format_error_detail(exc)}")
+        return None
+    except Exception as exc:
+        st.error(f"Erro de conexão: {exc}")
+        return None
+
+
+def _call_batch_status(job_id: str) -> dict | None:
+    try:
+        resp = httpx.get(
+            f"{BACKEND_URL}/agents/evaluate-article/batch/{job_id}",
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        st.error(f"Erro do backend: {_format_error_detail(exc)}")
+        return None
+    except Exception as exc:
+        st.error(f"Erro de conexão: {exc}")
+        return None
+
+
+def _list_batch_jobs() -> list[dict]:
+    try:
+        resp = httpx.get(f"{BACKEND_URL}/agents/evaluate-article/batch", timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return []
+
+
+def _batch_results_to_rows(results: list[dict]) -> tuple[list[dict], int]:
+    """Convert Batch API results into the same row shape produced by the
+    per-article flow, so the results table / AI Judge / export all work."""
+    rows = []
+    skipped = 0
+    for item in results:
+        evaluation = item.get("evaluation")
+        if not evaluation:
+            skipped += 1
+            continue
+        raw_exclusion = evaluation.get("exclusion_triggered", [])
+        raw_inclusion = evaluation.get("inclusion_criteria_met", [])
+        rows.append(
+            {
+                **evaluation,
+                "exclusion_triggered": "; ".join(raw_exclusion),
+                "inclusion_criteria_met": "; ".join(raw_inclusion),
+                "_article_title": item.get("title", ""),
+                "_article_abstract": item.get("abstract", ""),
+                "_article_keywords": item.get("keywords", []),
+                "_article_year": item.get("year"),
+                "_exclusion_triggered_raw": raw_exclusion,
+                "_inclusion_criteria_met_raw": raw_inclusion,
+            }
+        )
+    return rows, skipped
+
+
 def _call_evaluate_revision(payload: dict) -> dict | None:
     try:
         resp = httpx.post(
@@ -307,6 +383,7 @@ def _build_evaluation_revision_payload(
         "title": article_context["title"],
         "abstract": article_context["abstract"],
         "keywords": article_context["keywords"],
+        "year": article_context.get("year"),
         "research_protocol": protocol_context,
         "original_evaluation": {
             "score": original_evaluation.get("score", 0),
@@ -452,6 +529,7 @@ def _apply_csv_judge_and_revision(
                     "title": row.get("_article_title") or row.get("article_name", ""),
                     "abstract": row.get("_article_abstract", ""),
                     "keywords": row.get("_article_keywords", []),
+                    "year": row.get("_article_year"),
                 },
                 protocol_context,
                 {
@@ -629,6 +707,7 @@ with st.sidebar:
     # ── Agent selector ────────────────────────────────────────────────────────
     st.subheader("🤖 Agente")
     selected_agent_id = None
+    selected_provider = "ollama"
     try:
         agents_resp = httpx.get(
             f"{BACKEND_URL}/agents", params={"agent_type": "article-evaluator"}, timeout=10
@@ -653,9 +732,10 @@ with st.sidebar:
             None,
         )
         if active_ver:
+            selected_provider = active_ver.get("provider", "ollama")
             st.caption(
                 f"Versão: **{active_ver['version_name']}**\n\n"
-                f"Provedor: `{active_ver.get('provider', 'ollama')}`\n\n"
+                f"Provedor: `{selected_provider}`\n\n"
                 f"Modelo: `{active_ver['model_primary']}`\n\n"
                 f"Temp: `{active_ver['temperature']}`"
             )
@@ -824,7 +904,7 @@ if input_mode.startswith("📂"):
                     return c
             return cols[0]
 
-        col_t, col_a, col_k = st.columns(3)
+        col_t, col_a, col_k, col_y = st.columns(4)
         with col_t:
             title_col = st.selectbox(
                 "Coluna do título", cols,
@@ -840,6 +920,17 @@ if input_mode.startswith("📂"):
                 "Coluna de palavras-chave", cols,
                 index=cols.index(_guess_col(["keywords", "palavras-chave", "palavras_chave"])),
             )
+        with col_y:
+            _no_year = "(nenhuma)"
+            _year_guess = None
+            for c in cols:
+                if c.strip().lower() in ("year", "ano", "publication year", "ano de publicação", "ano_publicacao"):
+                    _year_guess = c
+                    break
+            year_col = st.selectbox(
+                "Coluna do ano (opcional)", [_no_year] + cols,
+                index=([_no_year] + cols).index(_year_guess) if _year_guess else 0,
+            )
 
         col_sep, col_limit = st.columns(2)
         with col_sep:
@@ -849,11 +940,67 @@ if input_mode.startswith("📂"):
                 "Limitar a N artigos (0 = todos)", min_value=0, value=0, step=1,
             )
 
+        use_batch_api = False
+        if selected_provider == "anthropic":
+            use_batch_api = st.checkbox(
+                "📦 Enviar via Batch API da Anthropic (assíncrono, 50% de desconto)",
+                value=False,
+                help=(
+                    "O lote é processado nos servidores da Anthropic (geralmente em "
+                    "menos de 1 hora) e os resultados ficam disponíveis por 29 dias. "
+                    "O container NÃO precisa ficar ligado durante o processamento — "
+                    "recupere os resultados depois no painel 'Jobs da Batch API' abaixo."
+                ),
+            )
+
         evaluate_csv_btn = st.button(
-            "🔍 Avaliar artigos do CSV", type="primary", use_container_width=True
+            "📦 Enviar lote para a Batch API" if use_batch_api else "🔍 Avaliar artigos do CSV",
+            type="primary",
+            use_container_width=True,
         )
 
-        if evaluate_csv_btn:
+        if evaluate_csv_btn and use_batch_api:
+            errors = _protocol_errors(backend_ok)
+            if errors:
+                for e in errors:
+                    st.error(e)
+                st.stop()
+
+            batch_rows = df if limit == 0 else df.head(int(limit))
+            articles = []
+            for _, row in batch_rows.iterrows():
+                year = None
+                if year_col != _no_year:
+                    try:
+                        year = int(float(str(row.get(year_col, "")).strip()))
+                    except (TypeError, ValueError):
+                        year = None
+                kw_raw = str(row.get(keywords_col, ""))
+                articles.append(
+                    {
+                        "title": str(row.get(title_col, "")).strip()[:1000],
+                        "abstract": str(row.get(abstract_col, "")).strip()[:10000],
+                        "keywords": [k.strip() for k in kw_raw.split(kw_sep) if k.strip()],
+                        "year": year,
+                    }
+                )
+
+            with st.spinner("Enviando lote para a Batch API da Anthropic..."):
+                job = _call_start_batch(
+                    {
+                        "articles": articles,
+                        "research_protocol": _build_protocol_payload(),
+                        "agent_id": selected_agent_id,
+                    }
+                )
+            if job:
+                st.success(
+                    f"Lote enviado! Job: `{job['job_id']}` ({job['total_articles']} artigo(s)). "
+                    "Acompanhe e recupere os resultados no painel 'Jobs da Batch API' abaixo — "
+                    "pode fechar tudo e voltar depois."
+                )
+
+        if evaluate_csv_btn and not use_batch_api:
             errors = _protocol_errors(backend_ok)
             if errors:
                 for e in errors:
@@ -874,6 +1021,13 @@ if input_mode.startswith("📂"):
                 kw_raw = str(row.get(keywords_col, ""))
                 keywords = [k.strip() for k in kw_raw.split(kw_sep) if k.strip()]
 
+                year = None
+                if year_col != _no_year:
+                    try:
+                        year = int(float(str(row.get(year_col, "")).strip()))
+                    except (TypeError, ValueError):
+                        year = None
+
                 if not title or not abstract or not keywords:
                     skipped += 1
                     progress.progress((idx + 1) / n, text=f"Avaliando {idx + 1}/{n}...")
@@ -883,6 +1037,7 @@ if input_mode.startswith("📂"):
                     "title": title[:1000],
                     "abstract": abstract[:10000],
                     "keywords": keywords,
+                    "year": year,
                     "research_protocol": protocol_payload,
                     "agent_id": selected_agent_id,
                 }
@@ -901,6 +1056,7 @@ if input_mode.startswith("📂"):
                             "_article_title": title[:1000],
                             "_article_abstract": abstract[:10000],
                             "_article_keywords": keywords,
+                            "_article_year": year,
                             "_exclusion_triggered_raw": raw_exclusion_triggered,
                             "_inclusion_criteria_met_raw": raw_inclusion_met,
                         }
@@ -914,9 +1070,105 @@ if input_mode.startswith("📂"):
             if skipped:
                 st.warning(f"{skipped} linha(s) ignorada(s) (dados incompletos ou erro de avaliação).")
 
+            history_files = {}
+            try:
+                uploaded.seek(0)
+                history_files["input_artigos.csv"] = uploaded.read()
+            except Exception:
+                pass
+            if results:
+                out_df = pd.DataFrame(results)
+                out_cols = [c for c in out_df.columns if not c.startswith("_")]
+                history_files["output_avaliacao.csv"] = _to_delimited_csv(out_df[out_cols])
+
+            history_id = history_store.save_record(
+                history_store.KIND_ARTICLE_EVALUATOR,
+                {
+                    "mode": "csv",
+                    "agent_id": selected_agent_id,
+                    "research_protocol": protocol_payload,
+                    "total_rows": n,
+                    "evaluated": len(results),
+                    "skipped": skipped,
+                    "input_filename": uploaded.name,
+                },
+                files=history_files,
+            )
+            st.session_state.csv_history_id = history_id
+
             st.session_state.csv_results = results
             st.session_state.csv_judge_summary = None
             st.rerun()
+
+    # ── Jobs da Batch API ──────────────────────────────────────────────────────
+    batch_jobs = _list_batch_jobs()
+    if batch_jobs or selected_provider == "anthropic":
+        with st.expander(f"📦 Jobs da Batch API ({len(batch_jobs)})", expanded=bool(batch_jobs)):
+            if not batch_jobs:
+                st.caption(
+                    "Nenhum job de batch registrado. Envie um CSV com a opção "
+                    "'Enviar via Batch API' marcada para criar um."
+                )
+            else:
+                _phase_labels = {
+                    "screening": "⏳ Triagem por título",
+                    "evaluating": "⏳ Avaliação completa",
+                    "completed": "✅ Concluído",
+                    "failed": "❌ Falhou",
+                }
+                job_options = {
+                    f"{j['job_id']} — {_phase_labels.get(j['phase'], j['phase'])} "
+                    f"({j['total_articles']} artigo(s), {j.get('created_at', '')})": j["job_id"]
+                    for j in batch_jobs
+                }
+                selected_job_label = st.selectbox(
+                    "Job", options=list(job_options.keys()), key="batch_job_select"
+                )
+                if st.button(
+                    "🔄 Verificar status / Recuperar resultados",
+                    use_container_width=True,
+                    key="batch_check_btn",
+                ):
+                    with st.spinner("Consultando a Batch API da Anthropic..."):
+                        status = _call_batch_status(job_options[selected_job_label])
+                    if status:
+                        if status["phase"] != "completed":
+                            st.info(
+                                status.get("message")
+                                or f"Job em fase '{status['phase']}'. Tente novamente em alguns minutos."
+                            )
+                        else:
+                            rows_from_batch, batch_errors = _batch_results_to_rows(
+                                status.get("results", [])
+                            )
+                            if batch_errors:
+                                st.warning(
+                                    f"{batch_errors} artigo(s) com erro no batch "
+                                    "(dados incompletos ou falha na avaliação)."
+                                )
+                            if rows_from_batch:
+                                st.session_state.csv_results = rows_from_batch
+                                st.session_state.csv_judge_summary = None
+
+                                out_df = pd.DataFrame(rows_from_batch)
+                                out_cols = [c for c in out_df.columns if not c.startswith("_")]
+                                st.session_state.csv_history_id = history_store.save_record(
+                                    history_store.KIND_ARTICLE_EVALUATOR,
+                                    {
+                                        "mode": "csv_batch_api",
+                                        "agent_id": selected_agent_id,
+                                        "batch_job_id": status["job_id"],
+                                        "total_rows": status.get("total_articles", 0),
+                                        "evaluated": len(rows_from_batch),
+                                        "skipped": batch_errors,
+                                    },
+                                    files={
+                                        "output_avaliacao.csv": _to_delimited_csv(out_df[out_cols])
+                                    },
+                                )
+                                st.rerun()
+                            else:
+                                st.error("O job terminou, mas nenhum artigo foi avaliado com sucesso.")
 
 # ── Modo manual (testes) ───────────────────────────────────────────────────────
 else:
@@ -940,6 +1192,14 @@ else:
         placeholder="Ex: machine learning, neural networks, climate change",
         key="ev_keywords_raw",
     )
+    st.number_input(
+        "Ano de publicação (opcional, 0 = não informado)",
+        min_value=0,
+        max_value=2100,
+        value=0,
+        step=1,
+        key="ev_year",
+    )
 
     evaluate_btn = st.button("🔍 Avaliar Artigo", type="primary", use_container_width=True)
 
@@ -947,6 +1207,7 @@ else:
         title    = st.session_state.ev_title
         abstract = st.session_state.ev_abstract
         keywords = [k.strip() for k in st.session_state.ev_keywords_raw.split(",") if k.strip()]
+        year     = int(st.session_state.ev_year) or None
 
         errors = _protocol_errors(backend_ok)
         if not title.strip():
@@ -965,6 +1226,7 @@ else:
             "title": title.strip(),
             "abstract": abstract.strip(),
             "keywords": keywords,
+            "year": year,
             "research_protocol": _build_protocol_payload(),
             "agent_id": selected_agent_id,
         }
@@ -978,11 +1240,23 @@ else:
             "title": title.strip(),
             "abstract": abstract.strip(),
             "keywords": keywords,
+            "year": year,
         }
         st.session_state.manual_protocol_context = payload["research_protocol"]
         st.session_state.manual_judge_result = None
         st.session_state.manual_revision_result = None
         st.session_state.evaluation_history.insert(0, result)
+
+        history_store.save_record(
+            history_store.KIND_ARTICLE_EVALUATOR,
+            {
+                "mode": "manual",
+                "agent_id": selected_agent_id,
+                "research_protocol": payload["research_protocol"],
+                "article": st.session_state.manual_article_context,
+                "result": result,
+            },
+        )
         st.rerun()
 
 
@@ -1026,6 +1300,30 @@ if st.session_state.csv_results:
                 )
                 st.session_state.csv_results = enriched_results
                 st.session_state.csv_judge_summary = judge_stats
+
+                enriched_df = pd.DataFrame(enriched_results)
+                enriched_cols = [c for c in enriched_df.columns if not c.startswith("_")]
+                enriched_csv = _to_delimited_csv(enriched_df[enriched_cols])
+                if st.session_state.csv_history_id:
+                    history_store.add_file(
+                        history_store.KIND_ARTICLE_EVALUATOR,
+                        st.session_state.csv_history_id,
+                        "output_avaliacao_com_judge.csv",
+                        enriched_csv,
+                    )
+                history_store.save_record(
+                    history_store.KIND_AI_JUDGE,
+                    {
+                        "mode": "csv_batch",
+                        "source": "article_evaluator",
+                        "agent_id": selected_agent_id,
+                        "research_protocol": protocol_context,
+                        "judge_stats": judge_stats,
+                        "articles_judged": len(enriched_results),
+                    },
+                    files={"output_judge.csv": enriched_csv},
+                )
+
                 n_errors = judge_stats.get("errors", 0)
                 status.update(
                     label=(
@@ -1198,6 +1496,20 @@ if st.session_state.evaluation_history:
                                 )
                             ],
                         }
+
+                history_store.save_record(
+                    history_store.KIND_AI_JUDGE,
+                    {
+                        "mode": "manual",
+                        "source": "article_evaluator",
+                        "agent_id": selected_agent_id,
+                        "article": article_context,
+                        "research_protocol": protocol_context,
+                        "original_evaluation": latest,
+                        "judge_result": judge_result,
+                        "revision_result": st.session_state.manual_revision_result,
+                    },
+                )
 
                 status.update(
                     label="Julgamento concluído com sucesso!",
