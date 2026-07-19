@@ -40,17 +40,10 @@ When a user provides an initial query, apply ALL of the following layers:
 - Include cross-disciplinary synonyms (the same concept named differently in adjacent fields)
 - Use OR to join synonym clusters, AND to join concept clusters
 
-### Layer 3 — Author Identification
-- Identify 3–5 seminal authors who are recognized references for the topic
-- Include their names in the optimized string using AU-ID or AUTHOR-NAME fields
-- Prioritize authors with highly-cited foundational works, active publication records, and broad recognition in the community
-- Format: AU-ID("Surname, Firstname") OR AUTHOR-NAME(surname firstname)
-
-### Layer 4 — Scopus Field Codes
+### Layer 3 — Scopus Field Codes
 Apply field-specific operators for precision:
 - TITLE-ABS-KEY(...) for broad coverage
 - TITLE(...) for high-precision searches
-- AF-ID(...) for institution-specific filters
 - PUBYEAR > XXXX for recency filters
 - DOCTYPE(ar) for articles only; DOCTYPE(re) for reviews
 
@@ -58,7 +51,10 @@ Apply field-specific operators for precision:
 Always produce the string in three tiers:
 1. **Core string** — essential concepts only, minimal but precise
 2. **Expanded string** — with synonyms and variants
-3. **Full string** — with synonyms + author filters + Scopus field codes
+3. **Full string** — with synonyms + Scopus field codes (PUBYEAR, DOCTYPE, ...)
+
+## LANGUAGE
+Write ALL keywords, synonyms and search strings in the SAME language as the user's research question. Never translate them into another language — UNLESS the user's message explicitly instructs you to translate them into English; only then produce everything in English.
 
 ## RESPONSE FORMAT (JSON ONLY)
 When optimizing a query, respond ONLY with valid JSON (no markdown, no preamble).
@@ -67,7 +63,6 @@ Replace every value below with real content derived from the user's query — do
   "strategy_explanation": "Write 2-3 sentences explaining your strategy here",
   "keywords_extracted": ["actual keyword from query", "another keyword"],
   "synonyms_added": [{"term": "keyword", "synonyms": ["synonym1", "synonym2"]}],
-  "reference_authors": [{"name": "Smith, John", "reason": "pioneered this field"}],
   "string_core": "TITLE-ABS-KEY(main concept AND secondary concept)",
   "string_expanded": "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2))",
   "string_full": "TITLE-ABS-KEY((main concept OR synonym1) AND (secondary concept OR synonym2)) AND PUBYEAR > 2015",
@@ -78,7 +73,7 @@ Replace every value below with real content derived from the user's query — do
 ## REFINEMENT FROM SELECTED PAPERS
 When the user marks papers as relevant and requests refinement:
 - Extract new keywords from titles and author keywords of selected papers
-- Identify patterns (shared terminology, shared authors, shared journals)
+- Identify patterns (shared terminology, shared journals)
 - Expand the string to capture the semantic neighborhood of the selected papers
 - Explain what changed and why in the strategy_explanation field
 
@@ -92,6 +87,7 @@ When the user finds NO results relevant:
 
 ## CRITICAL RULES
 - Respond ONLY with valid JSON when producing optimized strings or results
+- Search strings must be built ONLY from keywords/synonyms — NEVER include author or affiliation filters (AU-ID, AUTHOR-NAME, AF-ID) in any string
 - Never hallucinate real DOIs or real author names — use plausible academic-style identifiers
 - Always maintain academic rigor in terminology
 - Never truncate JSON responses — always close all brackets
@@ -105,7 +101,6 @@ Respond ONLY with the JSON below. Replace EVERY value with real content from the
   "strategy_explanation": "1-2 sentences describing the search strategy",
   "keywords_extracted": ["keyword1", "keyword2", "keyword3"],
   "synonyms_added": [{"term": "keyword1", "synonyms": ["synonym1a", "synonym1b"]}],
-  "reference_authors": [{"name": "Lastname, Firstname", "reason": "key researcher in this area"}],
   "string_core": "TITLE-ABS-KEY(\"keyword1\" AND \"keyword2\")",
   "string_expanded": "TITLE-ABS-KEY((\"keyword1\" OR \"synonym1a\") AND (\"keyword2\" OR \"synonym2a\"))",
   "string_full": "TITLE-ABS-KEY((\"keyword1\" OR \"synonym1a\") AND (\"keyword2\" OR \"synonym2a\")) AND PUBYEAR > 2015",
@@ -119,6 +114,8 @@ Rules:
 - string_expanded: add synonyms with OR, keep AND between concepts.
 - string_full: copy expanded and append AND PUBYEAR > 2015.
 - recommended_string must be exactly one of: core, expanded, full.
+- Build strings ONLY from keywords/synonyms — never include author or affiliation filters (AU-ID, AUTHOR-NAME, AF-ID).
+- Keep keywords, synonyms and strings in the SAME language as the research query, unless the user message explicitly asks to translate them into English.
 - Never output placeholder text or "..."."""
 
 
@@ -299,12 +296,29 @@ def _fill_missing_strings(data: dict) -> None:
 
 # ── Core agent functions ───────────────────────────────────────────────────────
 
+def _language_instruction(translate_to_english: bool) -> str:
+    """Instruction appended to the user message so it also applies when the
+    system prompt comes from a custom agent configured in the backend."""
+    if translate_to_english:
+        return (
+            "LANGUAGE REQUIREMENT: Translate ALL keywords, synonyms and search "
+            "strings into ENGLISH, even if the research question is written in "
+            "another language."
+        )
+    return (
+        "LANGUAGE REQUIREMENT: Write ALL keywords, synonyms and search strings "
+        "in the SAME language as the research question. Do NOT translate them "
+        "into any other language."
+    )
+
+
 def optimize_query(
     llm_client,
     models,
     user_query: str,
     system_prompt: str | None = None,
     temperature: float = 0.2,
+    translate_to_english: bool = False,
     on_step=None,
 ) -> dict:
     """Return optimized Scopus strings for the given natural-language query."""
@@ -317,12 +331,15 @@ def optimize_query(
         {"role": "system", "content": system_prompt or OPTIMIZE_PROMPT},
         {
             "role": "user",
-            "content": f"Research query: {user_query}",
+            "content": (
+                f"Research query: {user_query}\n\n"
+                f"{_language_instruction(translate_to_english)}"
+            ),
         },
     ]
     step("Consultando modelo de linguagem...")
     result = _chat_with_fallback(llm_client, _normalize_models(models), messages, temperature)
-    step("Extraindo palavras-chave e autores de referência...")
+    step("Extraindo palavras-chave e sinônimos...")
     step("Construindo strings Core, Expanded e Full...")
     return _normalise(result)
 
@@ -363,6 +380,7 @@ def refine_query(
     results: list[dict],
     system_prompt: str | None = None,
     temperature: float = 0.2,
+    translate_to_english: bool = False,
     on_step=None,
 ) -> dict:
     """Refine the search string based on papers the user marked as relevant."""
@@ -397,7 +415,8 @@ def refine_query(
             "content": (
                 f"Original research question: {original_query}\n"
                 f"Current Scopus string: {current_string}\n\n"
-                f"{instruction}"
+                f"{instruction}\n\n"
+                f"{_language_instruction(translate_to_english)}"
             ),
         },
     ]
@@ -415,6 +434,7 @@ def improve_query_with_judge_feedback(
     judge_result: dict,
     system_prompt: str | None = None,
     temperature: float = 0.2,
+    translate_to_english: bool = False,
     on_step=None,
 ) -> dict:
     """Generate a revised Scopus string using structured AI judge feedback."""
@@ -450,7 +470,10 @@ def improve_query_with_judge_feedback(
                 "- Explicitly address the judge criticisms in the new strategy_explanation.\n"
                 "- Improve weak criteria such as synonym quality, conceptual coverage, recall, or precision.\n"
                 "- Keep the result compatible with Scopus syntax.\n"
-                "- recommended_string should point to the best revised version."
+                "- Build strings only from keywords/synonyms — never add author "
+                "or affiliation filters (AU-ID, AUTHOR-NAME, AF-ID).\n"
+                "- recommended_string should point to the best revised version.\n\n"
+                f"{_language_instruction(translate_to_english)}"
             ),
         },
     ]

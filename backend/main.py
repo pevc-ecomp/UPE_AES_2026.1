@@ -138,7 +138,9 @@ def _seed_default_agents() -> None:
         seed_version_name=SCOPUS_AGENT_VERSION,
         version_description=(
             "Estrategista de busca acadêmica: extração de keywords, expansão de "
-            "sinônimos, identificação de autores de referência e códigos de campo do Scopus."
+            "sinônimos e códigos de campo do Scopus. Strings construídas apenas "
+            "com keywords (sem filtros de autores) e geradas no mesmo idioma da "
+            "questão de pesquisa, com opção de tradução para o inglês."
         ),
         system_prompt=SCOPUS_AGENT_PROMPT,
         temperature=0.2,

@@ -136,6 +136,16 @@ query = st.text_area(
     height=100,
 )
 
+translate_to_english = st.checkbox(
+    "🌐 Traduzir a string de busca para o inglês",
+    value=False,
+    key="translate_to_english",
+    help=(
+        "Por padrão, keywords e strings são geradas no mesmo idioma da questão "
+        "de pesquisa. Marque para gerar tudo em inglês."
+    ),
+)
+
 optimize_btn = st.button("🧠 Otimizar query para Scopus", type="primary", use_container_width=True)
 
 if optimize_btn:
@@ -149,6 +159,7 @@ if optimize_btn:
                 get_llm(), agent_models, query,
                 system_prompt=system_prompt,
                 temperature=agent_temperature,
+                translate_to_english=translate_to_english,
                 on_step=st.write,
             )
             st.session_state.opt_result     = result
@@ -171,6 +182,7 @@ if optimize_btn:
                     "action": "optimize",
                     "agent_id": selected_agent_id,
                     "research_question": query,
+                    "translate_to_english": translate_to_english,
                     "result": result,
                     "active_string": st.session_state.active_string,
                 },
@@ -198,17 +210,8 @@ if st.session_state.opt_result:
 
     st.info(f"**Estratégia:** {opt.get('strategy_explanation', '—')}")
 
-    kw_col, auth_col = st.columns(2)
-    with kw_col:
-        st.markdown("**Keywords extraídas:**")
-        st.write(", ".join(opt.get("keywords_extracted", [])))
-    with auth_col:
-        st.markdown("**Autores de referência:**")
-        for a in opt.get("reference_authors", []):
-            if isinstance(a, dict):
-                name   = a.get("name") or a.get("author") or a.get("surname") or str(a)
-                reason = a.get("reason") or a.get("justification") or ""
-                st.caption(f"• **{name}** — {reason}")
+    st.markdown("**Keywords extraídas:**")
+    st.write(", ".join(opt.get("keywords_extracted", [])))
 
     st.markdown("---")
     tab_core, tab_exp, tab_full = st.tabs(["Core", "Expanded", "Full"])
@@ -273,6 +276,7 @@ if st.session_state.opt_result:
                         st.session_state.judge_result,
                         system_prompt=system_prompt,
                         temperature=agent_temperature,
+                        translate_to_english=st.session_state.get("translate_to_english", False),
                         on_step=st.write,
                     )
                 history_store.save_record(

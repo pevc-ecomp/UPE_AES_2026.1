@@ -1,6 +1,6 @@
 # UPE_AES_2026.1
 
-Plataforma de apoio à revisão de literatura científica com agentes LLM locais.
+Plataforma de apoio à revisão de literatura científica com agentes LLM locais (Ollama) e via API (Anthropic/Claude).
 
 ## Serviços
 
@@ -8,8 +8,19 @@ Plataforma de apoio à revisão de literatura científica com agentes LLM locais
 |---|---|---|
 | Frontend (Streamlit) | http://localhost:8501 | Interface web |
 | Backend (FastAPI) | http://localhost:8000/docs | API REST + Swagger |
+| AI Judge (FastAPI) | http://localhost:8002/docs | Serviço "IA como juíza" |
 | Ollama | http://localhost:11434 | Servidor LLM local |
-| Chroma | http://localhost:8001 | Vector store |
+| Chroma | http://localhost:8001 | Vector store (legado) |
+
+## Funcionalidades
+
+- **🔎 String Optimizer** — constrói strings de busca otimizadas para o Scopus a partir de uma questão de pesquisa, com simulação de resultados e refinamento iterativo (TF-IDF sobre os artigos marcados como relevantes). As strings são construídas **apenas com keywords e sinônimos** (sem filtros de autores como `AU-ID`/`AUTHOR-NAME`) e saem, por padrão, **no mesmo idioma da questão de pesquisa** — com opção de traduzi-las para o inglês via checkbox na página.
+- **📋 Article Evaluator** — avalia artigos (título, abstract, keywords, ano) contra um protocolo de pesquisa, em duas etapas (triagem por título + avaliação completa). Entrada manual ou CSV em lote; provider Ollama (local) ou Anthropic (com prompt caching, modelo barato na triagem e opção de Batch API com 50% de desconto). Exporta CSV separado por `;;`.
+- **⚖️ AI Judge** — microserviço independente que julga strings de busca (score 0–5 por critério) e classificações de artigos (`CORRECT`/`UNCERTAIN`/`INCORRECT`), podendo disparar uma string v2 ou uma `classification_v2` revisada.
+- **🤖 Agentes** — gestão centralizada de agentes e versões (system prompt, modelos, temperatura, provider), com ativação de versão sem alterar código.
+- **🗂️ Histórico** — registro persistente (volume `data/`) das execuções das três ferramentas, incluindo arquivos de entrada/saída.
+
+> Detalhes de arquitetura e diagramas de fluxo: [data/ARQUITETURA.md](data/ARQUITETURA.md).
 
 ---
 
