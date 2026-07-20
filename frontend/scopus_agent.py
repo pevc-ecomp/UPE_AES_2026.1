@@ -7,7 +7,7 @@ or full pivot when no results are relevant.
 
 The system prompt, models and temperature are normally provided by the
 "scopus-agent" agent configured via the backend /agents API (see
-3_String_Optimizer.py). DEFAULT_SYSTEM_PROMPT is used only as a fallback when
+2_String_Optimizer.py). DEFAULT_SYSTEM_PROMPT is used only as a fallback when
 no such agent is configured.
 """
 

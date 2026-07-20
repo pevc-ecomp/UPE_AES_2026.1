@@ -1,0 +1,9 @@
+# Dependências para rodar os testes unitários no host (fora dos containers):
+#   pip install -r requirements.dev.txt
+#   python -m pytest tests/ -v
+pytest==8.4.2
+
+# Subconjunto mínimo das dependências dos serviços usado pelos módulos testados
+pandas==2.3.3
+json-repair==0.30.3
+pydantic==2.13.4

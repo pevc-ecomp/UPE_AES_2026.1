@@ -410,6 +410,175 @@ if st.session_state.opt_result:
                 st.session_state.suggested_string = ""
                 st.rerun()
 
+# ── Step 2.5 — Refinamento com artigos reais (CSV) ────────────────────────────
+if st.session_state.opt_result:
+    import pandas as pd
+
+    from csv_utils import guess_column, read_uploaded_csv
+
+    st.divider()
+    st.subheader("📥 Refinar com artigos reais (CSV)")
+    st.caption(
+        "Envie um CSV com artigos retornados pela base real (ex.: export do Scopus) "
+        "contendo título, abstract, keywords e ano. Selecione os artigos relevantes "
+        "e o agente refinará a string ativa para capturar melhor esse conjunto."
+    )
+    ref_upload = st.file_uploader(
+        "CSV de artigos (título, abstract, keywords, ano)",
+        type=["csv"],
+        key="csv_refine_upload",
+    )
+    if ref_upload is not None:
+        try:
+            ref_df = read_uploaded_csv(ref_upload)
+        except Exception as exc:
+            st.error(
+                "Não foi possível interpretar o CSV — verifique o formato/separador "
+                f"do arquivo. Detalhe: {exc}"
+            )
+            ref_df = None
+
+        if ref_df is not None and ref_df.empty:
+            st.warning("O CSV enviado não contém linhas.")
+        elif ref_df is not None:
+            cols = list(ref_df.columns)
+            _no_col = "(nenhuma)"
+
+            def _optional_index(candidates) -> int:
+                idx = guess_column(cols, candidates)
+                return idx + 1 if idx is not None else 0
+
+            map_c1, map_c2, map_c3, map_c4 = st.columns(4)
+            title_col = map_c1.selectbox(
+                "Coluna do título", cols,
+                index=guess_column(cols, ("title", "título", "titulo")) or 0,
+            )
+            abstract_col = map_c2.selectbox(
+                "Coluna do abstract", [_no_col] + cols,
+                index=_optional_index(("abstract", "resumo")),
+            )
+            kw_col = map_c3.selectbox(
+                "Coluna das keywords", [_no_col] + cols,
+                index=_optional_index(("keyword", "palavra")),
+            )
+            year_col = map_c4.selectbox(
+                "Coluna do ano", [_no_col] + cols,
+                index=_optional_index(("year", "ano")),
+            )
+
+            display_df = pd.DataFrame({"Selecionar": False, "Título": ref_df[title_col].astype(str)})
+            if year_col != _no_col:
+                display_df["Ano"] = ref_df[year_col]
+            if abstract_col != _no_col:
+                display_df["Abstract (início)"] = ref_df[abstract_col].astype(str).str.slice(0, 200)
+
+            edited_df = st.data_editor(
+                display_df,
+                hide_index=True,
+                use_container_width=True,
+                disabled=[c for c in display_df.columns if c != "Selecionar"],
+                column_config={
+                    "Selecionar": st.column_config.CheckboxColumn("Selecionar", default=False),
+                },
+                key=f"csv_refine_editor_{st.session_state.iteration}",
+            )
+            selected_rows = edited_df.index[edited_df["Selecionar"]].tolist()
+            n_sel = len(selected_rows)
+            st.caption(f"{n_sel} artigo(s) selecionado(s) de {len(ref_df)}.")
+            if n_sel > 10:
+                st.warning(
+                    "Muitos artigos selecionados — apenas os 10 primeiros serão "
+                    "enviados ao agente, para manter o prompt enxuto."
+                )
+
+            refine_csv_btn = st.button(
+                "🔁 Refinar string com os artigos selecionados",
+                type="primary",
+                use_container_width=True,
+                disabled=(n_sel == 0),
+            )
+            if refine_csv_btn:
+                articles = []
+                for i, row_idx in enumerate(selected_rows[:10]):
+                    row = ref_df.iloc[row_idx]
+
+                    def _cell(col: str) -> str:
+                        if col == _no_col or pd.isna(row[col]):
+                            return ""
+                        return str(row[col]).strip()
+
+                    keywords = [
+                        k.strip()
+                        for k in _cell(kw_col).replace(";", ",").split(",")
+                        if k.strip()
+                    ]
+                    year_raw = _cell(year_col)
+                    try:
+                        year = int(float(year_raw)) if year_raw else None
+                    except ValueError:
+                        year = None
+                    articles.append(
+                        {
+                            "id": f"CSV{i + 1:03d}",
+                            "title": _cell(title_col)[:300],
+                            "abstract_snippet": _cell(abstract_col)[:600],
+                            "keywords": keywords[:10],
+                            "year": year,
+                        }
+                    )
+
+                with st.status("Refinando string com os artigos reais...", expanded=True) as status:
+                    try:
+                        result = refine_query(
+                            get_llm(), agent_models,
+                            st.session_state.original_query,
+                            st.session_state.active_string,
+                            [a["id"] for a in articles],
+                            articles,
+                            system_prompt=system_prompt,
+                            temperature=agent_temperature,
+                            translate_to_english=st.session_state.get("translate_to_english", False),
+                            on_step=st.write,
+                        )
+                        st.session_state.opt_result = result
+                        _rec = result.get("recommended_string") or "expanded"
+                        st.session_state.active_string = (
+                            result.get(f"string_{_rec}")
+                            or result.get("string_expanded")
+                            or result.get("string_core")
+                            or st.session_state.active_string
+                        )
+                        st.session_state.iteration += 1
+                        st.session_state.sim_results = []
+                        st.session_state.selected_ids = []
+                        st.session_state.term_weights = []
+                        st.session_state.suggested_string = ""
+                        st.session_state.judge_result = None
+                        st.session_state.judge_improved_result = None
+                        history_store.save_record(
+                            history_store.KIND_STRING_OPTIMIZER,
+                            {
+                                "action": "refine_csv",
+                                "agent_id": selected_agent_id,
+                                "research_question": st.session_state.original_query,
+                                "iteration": st.session_state.iteration,
+                                "input_filename": ref_upload.name,
+                                "articles_selected": n_sel,
+                                "translate_to_english": st.session_state.get("translate_to_english", False),
+                                "search_string": st.session_state.active_string,
+                            },
+                        )
+                        status.update(
+                            label=f"String refinada com {min(n_sel, 10)} artigo(s) real(is)!",
+                            state="complete",
+                            expanded=False,
+                        )
+                    except Exception as e:
+                        status.update(label="Erro no refinamento", state="error", expanded=True)
+                        st.error(f"Erro ao refinar com os artigos do CSV: {e}")
+                        st.stop()
+                st.rerun()
+
 # ── Step 3 — Simulated results ────────────────────────────────────────────────
 if st.session_state.sim_results:
     st.divider()

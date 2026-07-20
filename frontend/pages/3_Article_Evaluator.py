@@ -24,54 +24,11 @@ ui.apply_style()
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000")
 PRESETS_FILE = Path("/app/data/article_presets.json")
 
-CSV_EXPORT_SEP = ";;"
-
-
-def _to_delimited_csv(df: pd.DataFrame, sep: str = CSV_EXPORT_SEP) -> bytes:
-    """Serialize a DataFrame with a two-character delimiter instead of pandas'
-    default single-character separator. Justification/reason columns are free
-    text that may contain commas or semicolons, so a single-char delimiter
-    risks false-positive column splits; every field is also quoted so the
-    delimiter itself can never be mistaken for one inside a value."""
-    def _escape(value) -> str:
-        text = "" if pd.isna(value) else str(value)
-        return '"' + text.replace('"', '""') + '"'
-
-    lines = [sep.join(_escape(c) for c in df.columns)]
-    for row in df.itertuples(index=False, name=None):
-        lines.append(sep.join(_escape(v) for v in row))
-    return ("\r\n".join(lines)).encode("utf-8")
-
-
-def _read_uploaded_csv(uploaded) -> pd.DataFrame:
-    """Read an uploaded CSV trying to auto-detect its separator/encoding.
-    Real-world exports (Scopus, WoS, Excel "CSV UTF-8", our own ';;'-delimited
-    export) use a variety of delimiters — hardcoding ',' broke on any file
-    that used ';' or a multi-char separator, since commas inside abstract
-    text get misread as extra column boundaries."""
-    attempts = [
-        {"sep": None, "engine": "python"},  # auto-sniff (comma, semicolon, tab, ...)
-        {"sep": CSV_EXPORT_SEP, "engine": "python"},
-        {"sep": ";"},
-        {"sep": ","},
-        {"sep": "\t"},
-    ]
-    last_error: Exception | None = None
-    for encoding in ("utf-8", "latin-1"):
-        for kwargs in attempts:
-            uploaded.seek(0)
-            try:
-                df = pd.read_csv(uploaded, encoding=encoding, **kwargs)
-            except Exception as exc:
-                last_error = exc
-                continue
-            if len(df.columns) > 1:
-                return df
-            last_error = ValueError(
-                "Apenas uma coluna foi detectada — o separador do arquivo provavelmente "
-                "não pôde ser identificado automaticamente."
-            )
-    raise last_error
+from csv_utils import (  # noqa: E402
+    CSV_EXPORT_SEP,
+    read_uploaded_csv as _read_uploaded_csv,
+    to_delimited_csv as _to_delimited_csv,
+)
 
 
 def _load_presets() -> dict:

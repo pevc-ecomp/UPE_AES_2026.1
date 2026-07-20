@@ -14,13 +14,10 @@ services:
       - .env
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - CHROMA_HOST=http://chroma:8000
       - DATABASE_URL=sqlite:////app/data/research.db
     volumes:
       - ./data:/app/data
     depends_on:
-      chroma:
-        condition: service_started
       ollama:
         condition: service_started
     mem_limit: 1g
@@ -41,7 +38,6 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - IA_JUDGE_URL=http://ia-judge:8000
-      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
     volumes:
       - ./data:/app/data
     depends_on:
@@ -94,25 +90,8 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  # ---------------------------------------------------------
-  # VECTOR STORE - Chroma
-  # ---------------------------------------------------------
-  chroma:
-    image: chromadb/chroma:latest
-    container_name: research_chroma
-    ports:
-      - "8001:8000"
-    environment:
-      - IS_PERSISTENT=TRUE
-      - ANONYMIZED_TELEMETRY=FALSE
-    volumes:
-      - chroma_data:/chroma/chroma
-    mem_limit: 512m
-    restart: unless-stopped
-
 volumes:
   ollama_data:
-  chroma_data:
 
 networks:
   default:

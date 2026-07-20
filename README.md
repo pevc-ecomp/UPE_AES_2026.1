@@ -10,11 +10,10 @@ Plataforma de apoio à revisão de literatura científica com agentes LLM locais
 | Backend (FastAPI) | http://localhost:8000/docs | API REST + Swagger |
 | AI Judge (FastAPI) | http://localhost:8002/docs | Serviço "IA como juíza" |
 | Ollama | http://localhost:11434 | Servidor LLM local |
-| Chroma | http://localhost:8001 | Vector store (legado) |
 
 ## Funcionalidades
 
-- **🔎 String Optimizer** — constrói strings de busca otimizadas para o Scopus a partir de uma questão de pesquisa, com simulação de resultados e refinamento iterativo (TF-IDF sobre os artigos marcados como relevantes). As strings são construídas **apenas com keywords e sinônimos** (sem filtros de autores como `AU-ID`/`AUTHOR-NAME`) e saem, por padrão, **no mesmo idioma da questão de pesquisa** — com opção de traduzi-las para o inglês via checkbox na página.
+- **🔎 String Optimizer** — constrói strings de busca otimizadas para o Scopus a partir de uma questão de pesquisa, com simulação de resultados e refinamento iterativo (TF-IDF sobre os artigos marcados como relevantes). As strings são construídas **apenas com keywords e sinônimos** (sem filtros de autores como `AU-ID`/`AUTHOR-NAME`) e saem, por padrão, **no mesmo idioma da questão de pesquisa** — com opção de traduzi-las para o inglês via checkbox na página. Também aceita um **CSV de artigos reais** (título, abstract, keywords, ano — ex.: export do Scopus): o usuário marca os artigos relevantes e o agente refina a string ativa para capturar melhor esse conjunto.
 - **📋 Article Evaluator** — avalia artigos (título, abstract, keywords, ano) contra um protocolo de pesquisa, em duas etapas (triagem por título + avaliação completa). Entrada manual ou CSV em lote; provider Ollama (local) ou Anthropic (com prompt caching, modelo barato na triagem e opção de Batch API com 50% de desconto). Exporta CSV separado por `;;`.
 - **⚖️ AI Judge** — microserviço independente que julga strings de busca (score 0–5 por critério) e classificações de artigos (`CORRECT`/`UNCERTAIN`/`INCORRECT`), podendo disparar uma string v2 ou uma `classification_v2` revisada.
 - **🤖 Agentes** — gestão centralizada de agentes e versões (system prompt, modelos, temperatura, provider), com ativação de versão sem alterar código.
@@ -76,6 +75,9 @@ O projeto inclui `commands.ps1` com todos os comandos necessários:
 
 # Ver status dos containers
 .\commands.ps1 status
+
+# Rodar os testes unitários (requer pip install -r requirements.dev.txt)
+.\commands.ps1 test
 ```
 
 ### Linux (Bash) — Docker Compose direto
@@ -83,6 +85,10 @@ O projeto inclui `commands.ps1` com todos os comandos necessários:
 ```bash
 # Subir todos os containers em background
 docker compose up -d
+
+# Se você atualizou de uma versão que ainda tinha o container do Chroma,
+# use --remove-orphans uma vez para removê-lo:
+docker compose up -d --remove-orphans
 
 # Rebuildar imagens (após mudanças no código)
 docker compose build --no-cache && docker compose up -d
@@ -159,6 +165,17 @@ docker compose restart backend
 
 # Reiniciar apenas o frontend
 docker compose restart frontend
+```
+
+---
+
+## Testes unitários
+
+Os testes cobrem as funções puras dos módulos principais (`scopus_agent`, `csv_utils`, `evaluation_core`) e rodam no host, sem containers:
+
+```bash
+pip install -r requirements.dev.txt
+python -m pytest tests/ -v
 ```
 
 ---

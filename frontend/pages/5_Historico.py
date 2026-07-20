@@ -91,7 +91,15 @@ with tab_optimizer:
         st.info("Nenhuma execução do String Optimizer registrada ainda.")
     for record in records:
         action = record.get("action", "optimize")
-        label = "🧠 Otimização" if action == "optimize" else f"🔁 Refinamento (iteração {record.get('iteration', '?')})"
+        if action == "optimize":
+            label = "🧠 Otimização"
+        elif action == "refine_csv":
+            label = (
+                f"📥 Refinamento com artigos reais ({record.get('input_filename', 'CSV')}) "
+                f"— iteração {record.get('iteration', '?')}"
+            )
+        else:
+            label = f"🔁 Refinamento (iteração {record.get('iteration', '?')})"
         with st.expander(f"{label} — {_fmt_timestamp(record)}"):
             st.markdown(f"**Questão de pesquisa:** {record.get('research_question', '—')}")
             if action == "optimize":
@@ -109,6 +117,13 @@ with tab_optimizer:
                 if record.get("active_string"):
                     st.markdown("**String ativa escolhida:**")
                     st.code(record["active_string"], language="text")
+            elif action == "refine_csv":
+                st.markdown("**Nova string após o refinamento:**")
+                st.code(record.get("search_string", ""), language="text")
+                st.markdown(
+                    f"**Artigos reais selecionados como relevantes:** "
+                    f"{record.get('articles_selected', '—')}"
+                )
             else:
                 st.markdown("**String de busca usada:**")
                 st.code(record.get("search_string", ""), language="text")
